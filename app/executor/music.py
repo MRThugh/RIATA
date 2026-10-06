@@ -1,6 +1,7 @@
 """
 Local music playback executor for R.I.A.T.A v0.1.0
 Author: Ali Kamrani (MRThugh)
+Security Hardening: Honest execution reporting and sandbox containment on audio paths.
 """
 
 import shutil
@@ -12,7 +13,15 @@ from app.core.config import get_config
 from app.core.constants import INTENT_PLAY_MUSIC, SUPPORTED_AUDIO_EXTENSIONS
 from app.core.logger import get_logger
 from app.engine.intent import Intent
-from app.executor.result import ExecutionResult
+from app.executor.files import is_allowed_path
+from app.executor.result import (
+    STATUS_EXECUTION_ERROR,
+    STATUS_FAILED,
+    STATUS_NOT_SUPPORTED,
+    STATUS_PATH_NOT_ALLOWED,
+    STATUS_SUCCESS,
+    ExecutionResult,
+)
 
 logger = get_logger("riata.executor.music")
 
@@ -49,7 +58,19 @@ def execute_play_music(intent: Intent) -> ExecutionResult:
     # Direct selection passed via entity (from context disambiguation)
     selected_path = intent.entities.get("selected_path")
     if selected_path:
-        track_path = Path(selected_path)
+        track_path = Path(selected_path).expanduser().resolve()
+        # Security sandbox check on track path
+        if not is_allowed_path(track_path, allow_tmp=True):
+            logger.warning("Selected audio path escapes allowed sandbox: %s", track_path)
+            return ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_PATH_NOT_ALLOWED,
+                intent_name=INTENT_PLAY_MUSIC,
+                message_key="music_not_found",
+                params={"song_name": track_path.stem},
+                error="Path outside allowed sandbox",
+            )
         if track_path.is_file():
             return _launch_track(track_path, config.dry_run)
 
@@ -61,6 +82,8 @@ def execute_play_music(intent: Intent) -> ExecutionResult:
         logger.info("Music directory is empty: %s", music_dir)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_FAILED,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_dir_empty" if not requested_song else "music_not_found",
             params={"song_name": requested_song or ""},
@@ -84,6 +107,8 @@ def execute_play_music(intent: Intent) -> ExecutionResult:
         logger.info("No local audio files matched query '%s'", requested_song)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_FAILED,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_not_found",
             params={"song_name": requested_song},
@@ -101,6 +126,8 @@ def execute_play_music(intent: Intent) -> ExecutionResult:
     logger.info("Multiple music matches found (%d tracks). Asking user to select.", len(matches))
     return ExecutionResult(
         success=True,
+        executed=False,
+        status=STATUS_SUCCESS,
         intent_name=INTENT_PLAY_MUSIC,
         message_key="music_multiple",
         params={
@@ -128,6 +155,8 @@ def _launch_track(track_path: Path, dry_run: bool) -> ExecutionResult:
         logger.info("Execution successful [DRY RUN — NOT EXECUTED]")
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_playing",
             params={"song_name": track_title},
@@ -146,6 +175,8 @@ def _launch_track(track_path: Path, dry_run: bool) -> ExecutionResult:
     if not player:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_not_found",
             params={"song_name": track_title},
@@ -163,15 +194,19 @@ def _launch_track(track_path: Path, dry_run: bool) -> ExecutionResult:
         logger.info("Playback initiated successfully")
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_playing",
             params={"song_name": track_title},
             action_summary=f"Playing {track_path}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
         logger.error("Failed to play track %s: %s", track_path, e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_PLAY_MUSIC,
             message_key="music_not_found",
             params={"song_name": track_title},

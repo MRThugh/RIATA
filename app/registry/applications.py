@@ -1,15 +1,19 @@
 """
 Extensible application registry and system detector for R.I.A.T.A v0.1.0
 Author: Ali Kamrani (MRThugh)
+Security Hardening: Strict allowlist enforcement, robust .desktop parsing, and rejection of dangerous binaries.
 """
 
 import os
 import re
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from app.core.config import get_config
+from app.core.constants import DANGEROUS_COMMANDS
 from app.core.logger import get_logger
 
 logger = get_logger("riata.registry")
@@ -25,12 +29,72 @@ class AppEntry:
     icon: Optional[str] = None
 
     def is_installed(self) -> bool:
-        """Check if command binary exists in system PATH."""
-        return shutil.which(self.command) is not None
+        """Check if command binary exists in system PATH or is an executable file."""
+        return self.get_executable_path() is not None
 
     def get_executable_path(self) -> Optional[str]:
         """Return absolute path to executable binary if installed."""
+        if os.path.isabs(self.command) and os.path.isfile(self.command) and os.access(self.command, os.X_OK):
+            return self.command
         return shutil.which(self.command)
+
+
+def parse_desktop_exec_line(raw_exec: str) -> Optional[str]:
+    """
+    Safely extract executable binary path/name from a Linux .desktop Exec line.
+
+    Handles:
+    - Quoted executable paths with spaces (e.g. "/opt/My App/bin/myapp" %u)
+    - Command-line arguments
+    - FreeDesktop field codes (%f, %F, %u, %U, %d, %D, %n, %N, %i, %c, %k, %v, %m, %%)
+    - Env wrappers (e.g. env VAR=VAL app)
+    - Malformed lines without crashing or invoking a shell
+    """
+    if not raw_exec or not raw_exec.strip():
+        return None
+
+    cleaned = raw_exec.strip()
+
+    # Reject shell control operators anywhere in the raw line
+    if any(ch in cleaned for ch in (";", "&", "|", "`", "$", ">", "<")):
+        logger.warning("Rejected suspicious shell characters in desktop Exec: %s", cleaned)
+        return None
+
+    try:
+        tokens = shlex.split(cleaned, posix=True)
+    except Exception:
+        # Fallback regex for unclosed quotes
+        m = re.match(r'^"([^"]+)"', cleaned)
+        if m:
+            tokens = [m.group(1)]
+        else:
+            tokens = cleaned.split()
+
+    if not tokens:
+        return None
+
+    # Step past 'env' or variable assignments if used as prefix
+    idx = 0
+    if tokens[idx] == "env":
+        idx += 1
+        while idx < len(tokens) and ("=" in tokens[idx] or tokens[idx].startswith("-")):
+            idx += 1
+
+    if idx >= len(tokens):
+        return None
+
+    exe = tokens[idx].strip()
+
+    # Reject field codes
+    if re.match(r"^%[a-zA-Z%]$", exe):
+        return None
+
+    # Reject shell control operators
+    if any(ch in exe for ch in (";", "&", "|", "`", "$", ">", "<")):
+        logger.warning("Rejected suspicious shell characters in desktop Exec: %s", exe)
+        return None
+
+    return exe
 
 
 # Built-in canonical applications catalog with aliases in English and Persian
@@ -123,7 +187,7 @@ BUILTIN_APPS: list[AppEntry] = [
 
 
 class ApplicationRegistry:
-    """Manages application discovery, registry, and resolution."""
+    """Manages application discovery, registry, and allowlist validation."""
 
     def __init__(self) -> None:
         self._entries: dict[str, AppEntry] = {}
@@ -181,10 +245,8 @@ class ApplicationRegistry:
                     if line.startswith("Name=") and name is None:
                         name = line[5:].strip()
                     elif line.startswith("Exec=") and exec_cmd is None:
-                        # Exec may contain field codes like %u, %F; strip them
                         raw_exec = line[5:].strip()
-                        clean_cmd = re.sub(r"%[a-zA-Z]", "", raw_exec).strip().split()[0]
-                        exec_cmd = clean_cmd
+                        exec_cmd = parse_desktop_exec_line(raw_exec)
                     elif line.startswith("Icon=") and icon is None:
                         icon = line[5:].strip()
                     elif line.startswith("NoDisplay=true"):
@@ -193,8 +255,8 @@ class ApplicationRegistry:
             if nodisplay or not name or not exec_cmd:
                 return
 
-            # Check if binary actually exists in PATH
-            if not shutil.which(exec_cmd):
+            # Check if binary actually exists in PATH or is an absolute file
+            if not shutil.which(exec_cmd) and not (os.path.isabs(exec_cmd) and os.path.isfile(exec_cmd)):
                 return
 
             app_id = filepath.stem.lower()
@@ -208,17 +270,29 @@ class ApplicationRegistry:
                     icon=icon,
                 )
                 self.register(entry)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed parsing desktop file %s: %s", filepath, e)
 
-    def find(self, query: str) -> Optional[AppEntry]:
-        """Find an application by query string (name, alias, or command)."""
+    def find(self, query: str, safe_execution: Optional[bool] = None) -> Optional[AppEntry]:
+        """
+        Find an application by query string (name, alias, or command).
+
+        Enforces safe_execution policy:
+        - When safe_execution=True (default): Only matches against allowlisted/registered
+          applications (built-ins and discovered .desktop entries).
+        - When safe_execution=False: If not in allowlist, checks if query is an installed
+          executable in PATH (provided it is not in DANGEROUS_COMMANDS).
+        """
         if not query:
             return None
 
         cleaned = query.strip().lower()
 
-        # 1. Direct alias match
+        # Proactively reject dangerous system commands from ever becoming an AppEntry
+        if cleaned in DANGEROUS_COMMANDS or any(cleaned == d for d in DANGEROUS_COMMANDS):
+            return None
+
+        # 1. Direct alias match in registered allowlist
         if cleaned in self._alias_map:
             return self._entries[self._alias_map[cleaned]]
 
@@ -228,14 +302,22 @@ class ApplicationRegistry:
             if alias.replace(" ", "").replace("-", "") == normalized_q:
                 return self._entries[app_id]
 
-        # 3. Partial / substring match
+        # 3. Partial / substring match in registered allowlist
         for app in self._entries.values():
-            if cleaned in app.display_name.lower() or cleaned in app.id:
+            if cleaned == app.display_name.lower() or cleaned == app.id:
                 return app
 
-        # 4. Check if query is directly an executable in system PATH
+        # 4. Check safe_execution semantics
+        if safe_execution is None:
+            safe_execution = get_config().safe_execution
+
+        # If strict safe_execution is active, reject arbitrary PATH queries not in allowlist
+        if safe_execution:
+            return None
+
+        # When safe_execution is explicitly relaxed: allow non-destructive installed binaries
         exe_path = shutil.which(cleaned)
-        if exe_path:
+        if exe_path and not any(cleaned == cmd for cmd in DANGEROUS_COMMANDS):
             return AppEntry(
                 id=cleaned,
                 display_name=cleaned.capitalize(),

@@ -28,7 +28,12 @@ from app.executor.application import execute_open_application
 from app.executor.files import execute_open_file, execute_open_folder
 from app.executor.music import execute_play_music
 from app.executor.response_generator import get_response_generator
-from app.executor.result import ExecutionResult
+from app.executor.result import (
+    STATUS_EXECUTION_ERROR,
+    STATUS_INVALID_COMMAND,
+    STATUS_PERMISSION_DENIED,
+    ExecutionResult,
+)
 from app.executor.system import (
     execute_exit_application,
     execute_open_file_manager,
@@ -76,18 +81,53 @@ class IntentRouter:
         direction = pack.direction
 
         # 2. Check for dangerous actions or clarification or unknown
-        if intent.is_dangerous or intent.is_clarification_needed or intent.name == INTENT_UNKNOWN:
-            dummy_result = ExecutionResult(
+        if intent.is_dangerous:
+            res = ExecutionResult(
                 success=False,
+                executed=False,
+                status=STATUS_PERMISSION_DENIED,
                 intent_name=intent.name,
-                message_key="unknown_intent",
-                params={},
+                message_key="dangerous_command",
+                error="Dangerous action blocked for safety",
+                message="Action blocked for security reasons.",
             )
-            response_text = self.response_generator.generate(dummy_result, intent)
+            response_text = self.response_generator.generate(res, intent)
             return ProcessOutput(
                 response_text=response_text,
                 intent=intent,
-                result=dummy_result,
+                result=res,
+                direction=direction,
+            )
+        elif intent.is_clarification_needed:
+            res = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_INVALID_COMMAND,
+                intent_name=intent.name,
+                message_key="clarify_general",
+                message=intent.clarification_prompt or "Clarification required.",
+            )
+            response_text = self.response_generator.generate(res, intent)
+            return ProcessOutput(
+                response_text=response_text,
+                intent=intent,
+                result=res,
+                direction=direction,
+            )
+        elif intent.name == INTENT_UNKNOWN:
+            res = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_INVALID_COMMAND,
+                intent_name=intent.name,
+                message_key="unknown_intent",
+                message="Unknown command.",
+            )
+            response_text = self.response_generator.generate(res, intent)
+            return ProcessOutput(
+                response_text=response_text,
+                intent=intent,
+                result=res,
                 direction=direction,
             )
 
@@ -131,6 +171,8 @@ class IntentRouter:
         if not handler:
             return ExecutionResult(
                 success=False,
+                executed=False,
+                status=STATUS_INVALID_COMMAND,
                 intent_name=intent.name,
                 message_key="unknown_intent",
                 params={},
@@ -142,6 +184,8 @@ class IntentRouter:
             logger.exception("Unexpected error executing %s: %s", intent.name, e)
             return ExecutionResult(
                 success=False,
+                executed=False,
+                status=STATUS_EXECUTION_ERROR,
                 intent_name=intent.name,
                 message_key="app_launch_failed",
                 params={"app_name": intent.name, "error": str(e)},

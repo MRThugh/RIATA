@@ -131,8 +131,13 @@ class RuleBasedIntentParser(BaseIntentParser):
         tokens = set(re.split(r"[\s+|;&`$()<>\\]+", lowered))
 
         for dangerous in DANGEROUS_COMMANDS:
+            if not dangerous.isalnum() and dangerous in lowered:
+                return True
             if dangerous in tokens:
                 return True
+
+        if ">" in lowered or "<" in lowered:
+            return True
 
         if re.search(r"\brm\s+-[a-zA-Z]*r", lowered) or re.search(r"\brm\s+", lowered):
             return True

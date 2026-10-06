@@ -1,6 +1,7 @@
 """
 System intents executor for R.I.A.T.A v0.1.0
 Author: Ali Kamrani (MRThugh)
+Security Hardening: Honest execution reporting and robust exception handling.
 """
 
 import os
@@ -23,7 +24,14 @@ from app.core.constants import (
 )
 from app.core.logger import get_logger
 from app.engine.intent import Intent
-from app.executor.result import ExecutionResult
+from app.executor.result import (
+    STATUS_EXECUTION_ERROR,
+    STATUS_FAILED,
+    STATUS_NOT_SUPPORTED,
+    STATUS_SUCCESS,
+    STATUS_TIMEOUT,
+    ExecutionResult,
+)
 
 logger = get_logger("riata.executor.system")
 
@@ -51,15 +59,20 @@ def execute_open_terminal(intent: Intent) -> ExecutionResult:
     if not selected:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_OPEN_TERMINAL,
             message_key="terminal_failed",
             params={},
+            error="No terminal emulator binary found",
         )
 
     if config.dry_run:
         logger.info("Executing terminal: %s [DRY RUN — NOT EXECUTED]", selected)
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_TERMINAL,
             message_key="terminal_opened",
             params={},
@@ -77,15 +90,19 @@ def execute_open_terminal(intent: Intent) -> ExecutionResult:
         )
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_TERMINAL,
             message_key="terminal_opened",
             params={},
             action_summary=f"Launched {selected}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
         logger.error("Failed to launch terminal %s: %s", selected, e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_OPEN_TERMINAL,
             message_key="terminal_failed",
             params={},
@@ -105,7 +122,6 @@ def execute_open_file_manager(intent: Intent) -> ExecutionResult:
             selected = fm
             break
 
-    # Fallback to xdg-open home
     if not selected:
         if shutil.which("xdg-open"):
             selected = "xdg-open"
@@ -113,14 +129,19 @@ def execute_open_file_manager(intent: Intent) -> ExecutionResult:
     if not selected:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_OPEN_FILE_MANAGER,
             message_key="file_manager_failed",
             params={},
+            error="No file manager available",
         )
 
     if config.dry_run:
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FILE_MANAGER,
             message_key="file_manager_opened",
             params={},
@@ -140,14 +161,18 @@ def execute_open_file_manager(intent: Intent) -> ExecutionResult:
         )
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FILE_MANAGER,
             message_key="file_manager_opened",
             params={},
             action_summary=f"Launched {selected}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_OPEN_FILE_MANAGER,
             message_key="file_manager_failed",
             params={},
@@ -175,14 +200,19 @@ def execute_open_settings(intent: Intent) -> ExecutionResult:
     if not selected:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_OPEN_SETTINGS,
             message_key="settings_failed",
             params={},
+            error="Settings utility not found",
         )
 
     if config.dry_run:
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_SETTINGS,
             message_key="settings_opened",
             params={},
@@ -199,14 +229,18 @@ def execute_open_settings(intent: Intent) -> ExecutionResult:
         )
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_SETTINGS,
             message_key="settings_opened",
             params={},
             action_summary=f"Launched {selected}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_OPEN_SETTINGS,
             message_key="settings_failed",
             params={},
@@ -215,8 +249,7 @@ def execute_open_settings(intent: Intent) -> ExecutionResult:
 
 
 def execute_show_system_info(intent: Intent) -> ExecutionResult:
-    """Safely gather non-sensitive system specs."""
-    # OS Info
+    """Safely gather non-sensitive system specs without root privileges."""
     os_name = "Linux"
     if Path("/etc/os-release").is_file():
         try:
@@ -230,14 +263,10 @@ def execute_show_system_info(intent: Intent) -> ExecutionResult:
     elif platform.system():
         os_name = f"{platform.system()} {platform.release()}"
 
-    # Kernel
     kernel = platform.release()
-
-    # Hostname
     hostname = socket.gethostname()
-
-    # CPU
     cpu = platform.processor() or "x86_64"
+
     if Path("/proc/cpuinfo").is_file():
         try:
             with open("/proc/cpuinfo", "r", encoding="utf-8") as f:
@@ -248,7 +277,6 @@ def execute_show_system_info(intent: Intent) -> ExecutionResult:
         except Exception:
             pass
 
-    # RAM
     ram = "N/A"
     if Path("/proc/meminfo").is_file():
         try:
@@ -264,6 +292,8 @@ def execute_show_system_info(intent: Intent) -> ExecutionResult:
 
     return ExecutionResult(
         success=True,
+        executed=False,  # Information query, not a process execution
+        status=STATUS_SUCCESS,
         intent_name=INTENT_SHOW_SYSTEM_INFO,
         message_key="system_info_body",
         params={
@@ -308,6 +338,8 @@ def execute_take_screenshot(intent: Intent) -> ExecutionResult:
     if not chosen_tool:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_TAKE_SCREENSHOT,
             message_key="screenshot_failed",
             params={},
@@ -317,6 +349,8 @@ def execute_take_screenshot(intent: Intent) -> ExecutionResult:
     if config.dry_run:
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_TAKE_SCREENSHOT,
             message_key="screenshot_saved",
             params={"path": str(target_file)},
@@ -334,14 +368,30 @@ def execute_take_screenshot(intent: Intent) -> ExecutionResult:
         )
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_TAKE_SCREENSHOT,
             message_key="screenshot_saved",
             params={"path": str(target_file)},
             action_summary=f"Saved screenshot to {target_file}",
         )
-    except Exception as e:
+    except subprocess.TimeoutExpired as e:
+        logger.error("Screenshot utility timed out: %s", e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_TIMEOUT,
+            intent_name=INTENT_TAKE_SCREENSHOT,
+            message_key="screenshot_failed",
+            params={},
+            error="Screenshot command timed out",
+        )
+    except (subprocess.CalledProcessError, PermissionError, FileNotFoundError, OSError) as e:
+        logger.error("Screenshot command failed: %s", e)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_TAKE_SCREENSHOT,
             message_key="screenshot_failed",
             params={},
@@ -353,6 +403,8 @@ def execute_exit_application(intent: Intent) -> ExecutionResult:
     """Exit R.I.A.T.A application."""
     return ExecutionResult(
         success=True,
+        executed=False,
+        status=STATUS_SUCCESS,
         intent_name=INTENT_EXIT_APPLICATION,
         message_key="exit",
         params={},

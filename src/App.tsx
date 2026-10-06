@@ -30,6 +30,9 @@ interface Message {
   entities?: Record<string, any>;
   direction: "rtl" | "ltr";
   timestamp: string;
+  status?: string;
+  executed?: boolean;
+  isError?: boolean;
   isDangerous?: boolean;
 }
 
@@ -106,23 +109,27 @@ export function App() {
         entities: data.intent?.entities,
         direction: data.direction || "ltr",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        status: data.status || (data.success ? "SUCCESS" : "FAILED"),
+        executed: data.executed || false,
+        isError: !data.success,
         isDangerous: data.intent?.is_dangerous,
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err: any) {
-      // Local fallback simulator if backend is offline
-      const isDangerous = textToSend.toLowerCase().includes("rm ") || textToSend.toLowerCase().includes("sudo ");
+      // Truthful error reporting when backend is offline - NEVER fake success!
       const assistantMsg: Message = {
         id: `err-${Date.now()}`,
         sender: "assistant",
-        text: isDangerous
-          ? "⚠️ این دستور به دلایل امنیتی مسدود شده است. R.I.A.T.A دستورات مخرب را اجرا نمی‌کند."
-          : `✓ فرمان پردازش شد: ${textToSend} [DRY RUN — NOT EXECUTED]`,
-        intentName: isDangerous ? "BLOCKED_DANGEROUS" : "OPEN_APPLICATION",
+        text: isPersian
+          ? "⚠ خطا: هسته R.I.A.T.A در دسترس نیست. فرمان اجرا نگردید."
+          : `⚠ Error: R.I.A.T.A backend is unavailable. Command was NOT executed. (${err.message || "Network Error"})`,
+        intentName: "BACKEND_UNAVAILABLE",
+        status: "BACKEND_UNAVAILABLE",
         direction: isPersian ? "rtl" : "ltr",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        isDangerous,
+        isError: true,
+        executed: false,
       };
       setMessages((prev) => [...prev, assistantMsg]);
     } finally {
@@ -310,11 +317,36 @@ export function App() {
                     {/* Assistant Header */}
                     {msg.sender === "assistant" && (
                       <div className="flex items-center justify-between gap-3 mb-2 pb-2 border-b border-slate-700/40 text-xs">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-sky-400 tracking-wider">R.I.A.T.A</span>
                           {msg.intentName && (
                             <span className="bg-slate-900 border border-slate-700 text-sky-300 px-2 py-0.5 rounded font-mono text-[11px]">
                               {msg.intentName}
+                            </span>
+                          )}
+                          {msg.status === "BACKEND_UNAVAILABLE" && (
+                            <span className="bg-red-950 border border-red-800 text-red-300 px-1.5 py-0.5 rounded font-semibold text-[10px]">
+                              ⚠ BACKEND UNAVAILABLE
+                            </span>
+                          )}
+                          {(msg.status === "PERMISSION_DENIED" || msg.isDangerous) && (
+                            <span className="bg-red-950 border border-red-800 text-red-300 px-1.5 py-0.5 rounded font-semibold text-[10px]">
+                              🛡️ BLOCKED
+                            </span>
+                          )}
+                          {msg.status === "PATH_NOT_ALLOWED" && (
+                            <span className="bg-amber-950 border border-amber-800 text-amber-300 px-1.5 py-0.5 rounded font-semibold text-[10px]">
+                              🚫 PATH NOT ALLOWED
+                            </span>
+                          )}
+                          {msg.status === "APP_NOT_FOUND" && (
+                            <span className="bg-amber-950 border border-amber-800 text-amber-300 px-1.5 py-0.5 rounded font-semibold text-[10px]">
+                              NOT FOUND
+                            </span>
+                          )}
+                          {msg.executed && (
+                            <span className="bg-emerald-950 border border-emerald-800 text-emerald-300 px-1.5 py-0.5 rounded font-semibold text-[10px]">
+                              ⚡ EXECUTED
                             </span>
                           )}
                           {msg.confidence !== undefined && msg.confidence > 0 && (
@@ -462,7 +494,7 @@ export function App() {
             </div>
 
             <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 h-[calc(100vh-14rem)] overflow-y-auto whitespace-pre">
-              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 29 automated tests.'}
+              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 50 automated tests.'}
             </div>
           </div>
         )}

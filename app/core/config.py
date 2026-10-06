@@ -61,6 +61,10 @@ class Config:
             data["language"] = os.environ["RIATA_LANG"]
         if os.getenv("RIATA_MUSIC_DIR"):
             data["music_directory"] = os.environ["RIATA_MUSIC_DIR"]
+        if os.getenv("RIATA_SAFE_EXECUTION", "").lower() in ("0", "false", "no"):
+            data["safe_execution"] = False
+        elif os.getenv("RIATA_SAFE_EXECUTION", "").lower() in ("1", "true", "yes"):
+            data["safe_execution"] = True
 
         cfg = cls()
         if "language" in data and (data["language"] in SUPPORTED_LANGUAGES or data["language"] == LANG_AUTO):

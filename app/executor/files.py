@@ -1,8 +1,10 @@
 """
 Files and folder executor for R.I.A.T.A v0.1.0
 Author: Ali Kamrani (MRThugh)
+Security Hardening: Strict filesystem sandbox containment and symlink escape prevention.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,17 +14,83 @@ from app.core.config import get_config
 from app.core.constants import INTENT_OPEN_FILE, INTENT_OPEN_FOLDER
 from app.core.logger import get_logger
 from app.engine.intent import Intent
-from app.executor.result import ExecutionResult
+from app.executor.result import (
+    STATUS_EXECUTION_ERROR,
+    STATUS_FAILED,
+    STATUS_INVALID_COMMAND,
+    STATUS_NOT_SUPPORTED,
+    STATUS_PATH_NOT_ALLOWED,
+    STATUS_SUCCESS,
+    ExecutionResult,
+)
 
 logger = get_logger("riata.executor.files")
 
+# Sensitive hidden folders within user home that must never be opened via generic commands
+SENSITIVE_HOME_PARTS = {".ssh", ".gnupg", ".pki"}
 
-def resolve_folder_path(folder_name: str) -> Optional[Path]:
-    """Safely resolve folder name to user directory."""
-    home = Path.home().resolve()
-    name_lower = folder_name.lower().strip()
 
-    mapping = {
+def is_allowed_path(
+    path: Path | str,
+    base_dir: Optional[Path] = None,
+    allow_tmp: bool = True,
+) -> bool:
+    """
+    Validate that target path resolves strictly inside user home (or /tmp).
+
+    Security Properties:
+    - Resolves all symlinks (preventing symlink escape attacks to /etc, etc.)
+    - Eliminates '..' and '.' traversal attempts
+    - Uses pathlib.Path containment logic (relative_to), preventing prefix bypasses
+      such as '/home/user2' matching '/home/user'
+    - Prevents traversal into sensitive credentials directories (.ssh, .gnupg)
+    """
+    if not path:
+        return False
+
+    try:
+        raw = Path(path).expanduser()
+        # Resolve symlinks and relative components
+        target = raw.resolve(strict=False)
+        home = (base_dir or Path.home()).resolve()
+
+        # 1. Check user home directory containment
+        try:
+            rel = target.relative_to(home)
+            # Ensure not inside sensitive credential folders
+            for part in rel.parts:
+                if part in SENSITIVE_HOME_PARTS:
+                    logger.warning("Attempted access to protected directory: %s", part)
+                    return False
+            return True
+        except ValueError:
+            pass
+
+        # 2. Check /tmp containment if permitted
+        if allow_tmp:
+            tmp = Path("/tmp").resolve()
+            try:
+                target.relative_to(tmp)
+                return True
+            except ValueError:
+                pass
+
+        return False
+    except Exception as e:
+        logger.debug("Path validation failed with exception: %s", e)
+        return False
+
+
+def resolve_folder_path(folder_name: str, base_dir: Optional[Path] = None) -> Optional[Path]:
+    """Safely resolve folder name to an allowed directory within user home."""
+    if not folder_name:
+        return None
+
+    home = (base_dir or Path.home()).resolve()
+    name_clean = folder_name.strip()
+    name_lower = name_clean.lower()
+
+    canonical_map = {
         "home": home,
         "downloads": home / "Downloads",
         "documents": home / "Documents",
@@ -32,8 +100,8 @@ def resolve_folder_path(folder_name: str) -> Optional[Path]:
         "desktop": home / "Desktop",
     }
 
-    if name_lower in mapping:
-        path = mapping[name_lower]
+    if name_lower in canonical_map:
+        path = canonical_map[name_lower]
         # Auto-create if standard user dir doesn't exist
         if not path.exists():
             try:
@@ -42,26 +110,28 @@ def resolve_folder_path(folder_name: str) -> Optional[Path]:
                 pass
         return path
 
-    # Check direct subdirectory in home
-    sub = home / folder_name
+    # Check custom subdirectory inside home
+    candidate = (home / name_clean).expanduser()
     try:
-        resolved = sub.resolve()
-        # Enforce filesystem safety: must be within user home
-        if str(resolved).startswith(str(home)) and resolved.is_dir():
+        resolved = candidate.resolve(strict=False)
+        # Enforce strict filesystem containment check
+        if is_allowed_path(resolved, base_dir=home, allow_tmp=False) and resolved.is_dir():
             return resolved
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed resolving custom folder '%s': %s", folder_name, e)
 
     return None
 
 
 def execute_open_folder(intent: Intent) -> ExecutionResult:
-    """Safely open local folder."""
+    """Safely open local folder using system handler."""
     config = get_config()
     folder_name = intent.entities.get("folder")
     if not folder_name:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="clarify_folder",
             params={},
@@ -69,9 +139,11 @@ def execute_open_folder(intent: Intent) -> ExecutionResult:
 
     folder_path = resolve_folder_path(folder_name)
     if not folder_path or not folder_path.is_dir():
-        logger.warning("Folder not found or invalid: %s", folder_name)
+        logger.warning("Folder not found or outside sandbox: %s", folder_name)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED if folder_path is None else STATUS_FAILED,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="folder_not_found",
             params={"folder_name": folder_name},
@@ -83,6 +155,8 @@ def execute_open_folder(intent: Intent) -> ExecutionResult:
         logger.info("Execution successful [DRY RUN — NOT EXECUTED]")
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="folder_opened",
             params={"folder_name": folder_name},
@@ -90,18 +164,16 @@ def execute_open_folder(intent: Intent) -> ExecutionResult:
             action_summary=f"xdg-open {folder_path} [DRY RUN]",
         )
 
-    xdg_open = shutil.which("xdg-open")
-    if not xdg_open:
-        # Fallback to file manager
-        xdg_open = shutil.which("nautilus") or shutil.which("gio")
-
+    xdg_open = shutil.which("xdg-open") or shutil.which("nautilus") or shutil.which("gio")
     if not xdg_open:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="folder_not_found",
             params={"folder_name": folder_name},
-            error="xdg-open not available",
+            error="No folder handler available (xdg-open / nautilus missing)",
         )
 
     try:
@@ -114,15 +186,19 @@ def execute_open_folder(intent: Intent) -> ExecutionResult:
         logger.info("Folder opened successfully: %s", folder_path)
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="folder_opened",
             params={"folder_name": folder_name},
             action_summary=f"Opened {folder_path}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
         logger.error("Failed to open folder %s: %s", folder_path, e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_OPEN_FOLDER,
             message_key="folder_not_found",
             params={"folder_name": folder_name},
@@ -131,77 +207,106 @@ def execute_open_folder(intent: Intent) -> ExecutionResult:
 
 
 def execute_open_file(intent: Intent) -> ExecutionResult:
-    """Safely open a local file with system default handler."""
+    """Safely open a local file with system default handler within allowed sandbox."""
     config = get_config()
     file_target = intent.entities.get("file")
     if not file_target:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_not_found",
             params={},
         )
 
-    path = Path(file_target).expanduser().resolve()
-    # Safety check: do not open sensitive system files like /etc/shadow
-    home = Path.home().resolve()
-    if not str(path).startswith(str(home)) and not str(path).startswith("/tmp"):
-        logger.warning("Disallowed file path outside user home: %s", path)
+    raw_path = Path(file_target).expanduser()
+    try:
+        resolved = raw_path.resolve(strict=False)
+    except Exception as e:
+        logger.warning("Invalid path resolution for %s: %s", file_target, e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_not_found",
             params={},
-            error="Path outside user space",
+            error="Invalid path",
         )
 
-    if not path.is_file():
+    # Security check: strict sandbox containment check
+    if not is_allowed_path(resolved, allow_tmp=True):
+        logger.warning("Disallowed file path outside allowed user sandbox: %s", resolved)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_not_found",
-            params={"file_name": path.name},
+            params={},
+            error="Path outside allowed sandbox",
+        )
+
+    if not resolved.is_file():
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_FAILED,
+            intent_name=INTENT_OPEN_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved.name},
+            error="File does not exist",
         )
 
     if config.dry_run:
         return ExecutionResult(
             success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_opened",
-            params={"file_name": path.name},
+            params={"file_name": resolved.name},
             is_dry_run=True,
-            action_summary=f"xdg-open {path} [DRY RUN]",
+            action_summary=f"xdg-open {resolved} [DRY RUN]",
         )
 
     xdg_open = shutil.which("xdg-open")
     if not xdg_open:
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_NOT_SUPPORTED,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_not_found",
-            params={"file_name": path.name},
+            params={"file_name": resolved.name},
             error="xdg-open not available",
         )
 
     try:
         subprocess.Popen(
-            [xdg_open, str(path)],
+            [xdg_open, str(resolved)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         return ExecutionResult(
             success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_opened",
-            params={"file_name": path.name},
-            action_summary=f"Opened {path}",
+            params={"file_name": resolved.name},
+            action_summary=f"Opened {resolved}",
         )
-    except Exception as e:
+    except (PermissionError, FileNotFoundError, OSError) as e:
+        logger.error("Failed to open file %s: %s", resolved, e)
         return ExecutionResult(
             success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
             intent_name=INTENT_OPEN_FILE,
             message_key="file_not_found",
-            params={"file_name": path.name},
+            params={"file_name": resolved.name},
             error=str(e),
         )

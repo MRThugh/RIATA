@@ -2,6 +2,6 @@
 
 @layer base {
   body {
-    font-family: "Inter", "Vazirmatn", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Vazirmatn", "IRANSans", Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
   }
 }
