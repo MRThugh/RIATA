@@ -1,0 +1,74 @@
+{
+  "intents": {
+    "OPEN_TERMINAL": {
+      "patterns": [
+        "^(open|launch|start|run)?\\s*terminal$",
+        "^(open|launch|start)?\\s*console$",
+        "^terminal$"
+      ],
+      "keywords": ["terminal", "console"]
+    },
+    "OPEN_FILE_MANAGER": {
+      "patterns": [
+        "^(open|launch|start)?\\s*file\\s*manager$",
+        "^(open|launch)?\\s*files$",
+        "^file\\s*manager$"
+      ],
+      "keywords": ["file manager", "files"]
+    },
+    "OPEN_SETTINGS": {
+      "patterns": [
+        "^(open|launch|show)?\\s*(system\\s+)?settings$",
+        "^(open|launch)?\\s*control\\s*center$",
+        "^settings$"
+      ],
+      "keywords": ["settings", "control center"]
+    },
+    "SHOW_SYSTEM_INFO": {
+      "patterns": [
+        "^(show|display|get)?\\s*system\\s*(info|information|specs)$",
+        "^system\\s*info$",
+        "^about\\s*system$"
+      ],
+      "keywords": ["system info", "system information", "system specs"]
+    },
+    "TAKE_SCREENSHOT": {
+      "patterns": [
+        "^(take|capture)(\\s+a)?\\s*screenshot$",
+        "^capture\\s+screen$",
+        "^screenshot$"
+      ],
+      "keywords": ["screenshot", "capture screen"]
+    },
+    "EXIT_APPLICATION": {
+      "patterns": [
+        "^(exit|quit|close)(\\s+riata)?$",
+        "^bye$",
+        "^goodbye$"
+      ],
+      "keywords": ["exit", "quit", "close", "bye", "goodbye"]
+    },
+    "PLAY_MUSIC": {
+      "patterns": [
+        "^play\\s+(music|a\\s+song|song)$",
+        "^play\\s+(.+)$",
+        "^start\\s+music$"
+      ],
+      "keywords": ["play", "music", "song"]
+    },
+    "OPEN_FOLDER": {
+      "patterns": [
+        "^(open|show|explore)\\s+(?:my\\s+)?folder\\s+(.+)$",
+        "^(open|show|explore)\\s+(?:my\\s+)?(.+?)\\s+folder$",
+        "^folder\\s+(.+)$"
+      ],
+      "keywords": ["folder"]
+    },
+    "OPEN_APPLICATION": {
+      "patterns": [
+        "^(open|launch|start|run)\\s+(app|application\\s+)?(.+)$"
+      ],
+      "keywords": ["open", "launch", "start", "run"]
+    }
+  }
+}

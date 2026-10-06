@@ -1,0 +1,6 @@
+# R.I.A.T.A v0.1.0 Dependencies
+# Responsive Intent Automation & Task Assistant
+# Author: Ali Kamrani (MRThugh)
+
+PySide6>=6.5.0
+pytest>=7.0.0

@@ -1,0 +1,30 @@
+{
+  "contractions": {
+    "what's": "what is",
+    "it's": "it is",
+    "can't": "cannot",
+    "won't": "will not",
+    "let's": "let us"
+  },
+  "particles_to_strip": [
+    "please",
+    "can you please",
+    "can you",
+    "could you please",
+    "could you",
+    "would you please",
+    "would you",
+    "will you",
+    "i want to",
+    "i would like to",
+    "just",
+    "now",
+    "quickly"
+  ],
+  "articles_to_strip": [
+    "the",
+    "a",
+    "an",
+    "my"
+  ]
+}
