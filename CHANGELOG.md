@@ -32,10 +32,12 @@ Release v0.1.1 is a stabilization, security hardening, and architecture consolid
   - Blocked sibling directory prefix bypasses (`/home/user2` vs `/home/user`).
   - Added protections against accessing sensitive credential folders (`.ssh`, `.gnupg`, `.pki`, `.aws`, `.docker`, `.kube`, `.password-store`, `.netrc`).
 - **Web API Bridge Hardening**:
+  - Bound Vite development server strictly to local loopback (`127.0.0.1:3000`).
+  - Added socket-level remote IP check rejecting non-loopback connections.
   - Enforced `Sec-Fetch-Site` blocking to reject cross-site browser requests.
-  - Required anti-CSRF authentication header token (`X-RIATA-Client: web-v0.1.1`) on all API endpoints.
+  - Required companion client identifier header (`X-RIATA-Client: web-v0.1.1`) on all API endpoints.
   - Removed insecure origin fallbacks (`if (!originHeader) return true;`).
-  - Added Host and Origin hostname matching against local loopback.
+  - Enforced Host and Origin hostname matching against local loopback.
   - Added a 15-second subprocess execution timeout to prevent hanging or zombie processes.
 - **Subprocess Safety**: Verified 100% zero usage of `shell=True` or arbitrary shell strings across all executor modules.
 - **Language Pack Fault Isolation**: Isolated `rules.py` imports with `BaseException` handling so malformed third-party packs log warnings without crashing the core assistant.

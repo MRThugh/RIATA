@@ -4,11 +4,12 @@ import tailwindcss from "@tailwindcss/vite";
 import { spawn } from "child_process";
 import { IncomingMessage } from "http";
 
-// Authorized client identifier token
-const RIATA_CLIENT_TOKEN = "web-v0.1.1";
+// Client identifier token used to distinguish requests from the bundled companion
+const RIATA_CLIENT_IDENTIFIER = "web-v0.1.1";
 
-// Allowed loopback hostnames
+// Allowed loopback hostnames and remote IP addresses
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 interface SecurityCheckResult {
   allowed: boolean;
@@ -18,12 +19,22 @@ interface SecurityCheckResult {
 }
 
 function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
+  // 1. Strict loopback socket connection check
+  const remoteIp = req.socket?.remoteAddress || "";
+  if (remoteIp && !LOOPBACK_IPS.has(remoteIp)) {
+    return {
+      allowed: false,
+      statusCode: 403,
+      message: `Forbidden: API access rejected from non-loopback remote address (${remoteIp}).`,
+    };
+  }
+
   const hostHeader = (req.headers["host"] || "").split(":")[0].toLowerCase();
   const originHeader = (req.headers["origin"] as string) || "";
   const secFetchSite = (req.headers["sec-fetch-site"] as string) || "";
-  const clientToken = (req.headers["x-riata-client"] as string) || "";
+  const clientIdentifier = (req.headers["x-riata-client"] as string) || "";
 
-  // 1. Block any explicit cross-site request immediately
+  // 2. Block any cross-site browser requests immediately
   if (secFetchSite === "cross-site") {
     return {
       allowed: false,
@@ -32,28 +43,25 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     };
   }
 
-  // 2. Validate Host header
-  if (!hostHeader) {
+  // 3. Validate Host header is strictly local loopback
+  if (!hostHeader || !LOOPBACK_HOSTNAMES.has(hostHeader)) {
     return {
       allowed: false,
-      statusCode: 400,
-      message: "Bad Request: Missing Host header.",
+      statusCode: 403,
+      message: "Forbidden: Host must be local loopback (127.0.0.1 / localhost).",
     };
   }
 
-  // 3. Validate Origin when present
+  // 4. Validate Origin when present
   if (originHeader) {
     try {
       const parsedOrigin = new URL(originHeader);
       const originHost = parsedOrigin.hostname.toLowerCase();
-      const isLoopback = LOOPBACK_HOSTNAMES.has(originHost);
-      const matchesHost = originHost === hostHeader;
-
-      if (!isLoopback && !matchesHost) {
+      if (!LOOPBACK_HOSTNAMES.has(originHost)) {
         return {
           allowed: false,
           statusCode: 403,
-          message: `Forbidden: Origin '${parsedOrigin.origin}' is not authorized.`,
+          message: `Forbidden: Origin '${parsedOrigin.origin}' is not local loopback.`,
         };
       }
     } catch {
@@ -63,23 +71,14 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
         message: "Bad Request: Malformed Origin header.",
       };
     }
-  } else {
-    // CRITICAL: Never trust origin-less requests automatically without anti-CSRF token verification
-    if (clientToken !== RIATA_CLIENT_TOKEN) {
-      return {
-        allowed: false,
-        statusCode: 403,
-        message: "Forbidden: Missing anti-CSRF authentication header 'X-RIATA-Client'.",
-      };
-    }
   }
 
-  // 4. Require X-RIATA-Client token for all API endpoints
-  if (clientToken !== RIATA_CLIENT_TOKEN) {
+  // 5. Require client identifier header from the bundled companion
+  if (clientIdentifier !== RIATA_CLIENT_IDENTIFIER) {
     return {
       allowed: false,
       statusCode: 403,
-      message: `Forbidden: Invalid or missing 'X-RIATA-Client' header token.`,
+      message: "Forbidden: Missing or invalid 'X-RIATA-Client' identifier header.",
     };
   }
 
@@ -383,6 +382,6 @@ except Exception as e:
   ],
   server: {
     port: 3000,
-    host: "0.0.0.0",
+    host: "127.0.0.1",
   },
 });

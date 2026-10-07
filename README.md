@@ -147,9 +147,9 @@ R.I.A.T.A uses a three-tier permission model evaluated **before** execution:
 * Destructive keywords (`rm`, `sudo`, `mkfs`, `dd`, `chmod`, `chown`, `:(){ :|:& };:`, etc.) are intercepted with `STATUS_PERMISSION_DENIED`.
 
 ### 3. Web Companion Security Boundary
-* The Web development companion API (`/api/command`, `/api/run-tests`) requires a custom client token header (`X-RIATA-Client: web-v0.1.1`).
-* Enforces `Sec-Fetch-Site` restrictions, Host validation, and Origin verification. Cross-site requests from untrusted origins are blocked with HTTP 403 Forbidden.
-* Subprocess execution has an enforced 15-second timeout and 16KB payload limit.
+* **Local Loopback Only:** The development server is bound strictly to `127.0.0.1:3000` (loopback only) and is not exposed to external networks or LAN interfaces.
+* **Strict Browser Guardrails:** Enforces `Sec-Fetch-Site` restrictions, Host loopback validation, Origin verification, and a companion client identifier header (`X-RIATA-Client: web-v0.1.1`). Cross-site or non-loopback requests are rejected with HTTP 403 Forbidden.
+* **Timeout & Payload Limits:** Subprocess execution has an enforced 15-second timeout and 16KB payload limit.
 
 ---
 
