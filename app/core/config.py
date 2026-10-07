@@ -40,6 +40,10 @@ class Config:
     debug: bool = False
     logging_level: str = "INFO"
     safe_execution: bool = True
+    context_lifetime: float = 300.0  # 5 minutes session TTL
+    confirmation_lifetime: float = 60.0  # 1 minute pending confirmation TTL
+    max_context_history: int = 20
+    max_plan_steps: int = 5
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":

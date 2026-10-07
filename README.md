@@ -1,6 +1,6 @@
 # R.I.A.T.A — Responsive Intent Automation & Task Assistant
 
-**Current Version:** 0.1.1  
+**Current Version:** 0.2.0  
 **Author & Maintainer:** Ali Kamrani ([MRThugh](https://github.com/MRThugh))  
 **Repository:** [https://github.com/MRThugh/RIATA](https://github.com/MRThugh/RIATA)  
 **Platform:** Ubuntu Linux  
@@ -12,30 +12,32 @@
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-brightgreen.svg)
 ![GUI](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52.svg)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%20Linux-E95420.svg)
-![Tests](https://img.shields.io/badge/tests-73%20passed-green.svg)
-![Release](https://img.shields.io/badge/release-v0.1.1%20(Stabilization)-orange.svg)
+![Tests](https://img.shields.io/badge/tests-108%20passed-green.svg)
+![Release](https://img.shields.io/badge/release-v0.2.0%20(Context--Aware)-orange.svg)
 
 ---
 
 ## 💡 What is R.I.A.T.A?
 
-**R.I.A.T.A** (Responsive Intent Automation & Task Assistant) is a deterministic, privacy-first Linux desktop intent assistant for Ubuntu.
+**R.I.A.T.A** (Responsive Intent Automation & Task Assistant) is a deterministic, local-first, privacy-respecting Linux desktop assistant for Ubuntu.
 
-It provides a unified conversational interface to launch applications, navigate local folders, search and play music, manage desktop windows, and inspect system telemetry — natively in both **Persian (فارسی)** and **English**.
+It provides a unified conversational interface to launch and terminate applications, navigate local directories, manage sandbox files and folders, open validated web URLs, play local music, and inspect system telemetry — natively in both **Persian (فارسی)** and **English**.
 
-### 🔒 100% Offline & Deterministic
-R.I.A.T.A does **not** rely on cloud APIs, Large Language Models (LLMs), or black-box autonomous agents. It operates deterministically using a decoupled, rule-based **Intent Engine** that separates language understanding from operating system execution:
+### 🔒 100% Offline, Deterministic & Local-First
+R.I.A.T.A does **not** rely on cloud APIs, external Large Language Models (LLMs), or unpredictable autonomous computer-control agents. It operates deterministically using a decoupled, rule-based **Intent Engine**, **Context Engine**, and **Command Planner** that separates linguistic understanding and conversational state from operating system execution:
 
-* **Persian (RTL):** `فایرفاکس رو باز کن`
-* **English (LTR):** `Open Firefox`
+* **Persian (RTL):** `کروم رو باز کن و فایل منیجر رو باز کن`
+* **English (LTR):** `Open Chrome and open File Manager`
 
-Both inputs normalize and extract into the identical language-independent structure:
+Both multi-step commands are parsed into deterministic dependency-tracked steps without arbitrary code generation:
 ```python
-Intent(
-    name="OPEN_APPLICATION",
-    confidence=0.95,
-    entities={"application": "firefox"},
-    language="fa" # or "en"
+CommandPlan(
+    plan_id="plan-179140...",
+    steps=[
+        CommandStep(step_id=1, intent=Intent("OPEN_APPLICATION", entities={"application": "chrome"})),
+        CommandStep(step_id=2, intent=Intent("OPEN_FILE_MANAGER"), dependencies=[0]),
+    ],
+    status="PENDING"
 )
 ```
 
@@ -43,22 +45,25 @@ Intent(
 
 ## 🏛️ Architecture
 
-R.I.A.T.A is built on a clean, unidirectional processing pipeline:
+R.I.A.T.A v0.2.0 is built on a clean, unidirectional, and strictly gated processing pipeline:
 
 ```text
-User Input
+User Input (Persian / English)
     │
     ▼
-Language Detection & Normalization (Registry & Language Packs)
+Language Detection & Normalization (Registry & Declarative Packs)
     │
     ▼
-Intent Engine (Parser, Matcher, Entity Extractor)
+Intent Engine (Grammar, Matcher, Entity Extractor)
     │
     ▼
-Interaction Context (Turn Memory, Disambiguation, Clarification)
+Context Engine & Entity Resolver (Pronoun & Locative Disambiguation)
     │
     ▼
-Policy Engine (Risk Evaluation: ALLOW, CONFIRM, DENY)
+Command Planner (Multi-Step DAG & Dependency Mapping)
+    │
+    ▼
+Policy Engine (Authoritative Risk Evaluation: ALLOW, CONFIRM, DENY)
     │
     ▼
 Capability Registry (Modular Capability Routing)
@@ -75,112 +80,114 @@ Operating System (Ubuntu Linux Desktop)
 
 ### Architectural Principles:
 1. **Language-Agnostic Core:** Core modules know nothing about Persian or English grammar. All linguistics are encapsulated in self-contained Language Packs.
-2. **Deterministic Confidence:** Intent matching scores confidence through transparent pattern weights (`0.0` to `1.0`), never heuristic hallucination.
-3. **Execution Safety:** All desktop operations pass through the **Policy Engine** (`ALLOW`, `CONFIRM`, `DENY`) before reaching executors.
-4. **Zero-Shell Execution:** Arbitrary user strings are never evaluated via `shell=True` or `bash -c`. Binaries are validated through the Application Registry and invoked via `subprocess.Popen` with explicit arguments.
+2. **Deterministic Contextual Memory:** Conversational state (active app, active directory, active file, open applications) is maintained in isolated sessions without fuzzy heuristics.
+3. **Command Planning with Failure Isolation:** Sequential commands are planned with explicit step dependencies. If step `n` fails or is blocked by security policy, subsequent steps `n+1..` are safely skipped.
+4. **Authoritative Policy Gate:** Context and multi-step plans can never bypass the **Policy Engine** (`ALLOW`, `CONFIRM`, `DENY`).
+5. **Zero-Shell Execution:** Arbitrary user strings are never evaluated via `shell=True` or `bash -c`. Binaries are validated through the Application Registry and invoked via `subprocess.Popen` with explicit arguments.
+6. **Non-Replayable Confirmations:** High-risk actions require single-use, session-bound confirmation tokens (`PendingConfirmation`) that cannot be replayed.
 
 ---
 
-## 🧩 Desktop Capabilities (v0.1.1 Status)
+## 🧩 Desktop Capabilities (v0.2.0 Status)
 
 Desktop actions are registered as modular Capabilities in `app/capabilities/`:
 
-| Capability ID | Name | Intents | Status in v0.1.1 | Description |
+| Capability ID | Name | Intents | Status in v0.2.0 | Description |
 |---|---|---|---|---|
-| `applications` | Applications Launcher | `OPEN_APPLICATION` | **Implemented** | Resolves applications via desktop entries and system paths; launches without shell. |
-| `filesystem` | Filesystem & Folders | `OPEN_FOLDER`, `OPEN_FILE` | **Implemented** | Opens standard XDG folders and user files within sandbox. Traversal outside `~` is blocked. |
+| `applications` | Applications Manager | `OPEN_APPLICATION`, `CLOSE_APPLICATION`, `OPEN_URL` | **Implemented** | Launches allowlisted apps, terminates apps safely (`pkill`), and opens sanitized HTTP/HTTPS URLs. |
+| `filesystem` | Filesystem Sandbox | `OPEN_FOLDER`, `OPEN_FILE`, `CREATE_FILE`, `DELETE_FILE`, `CREATE_FOLDER`, `DELETE_FOLDER` | **Implemented** | Safe file and folder operations strictly contained within `~` and `/tmp`. Traversal outside sandbox is blocked. |
 | `media` | Audio & Media | `PLAY_MUSIC` | **Implemented** | Scans `~/Music` for `.mp3`, `.flac`, `.wav`, `.ogg`. Provides candidate disambiguation. |
-| `system` | System Utilities | `OPEN_TERMINAL`, `OPEN_SETTINGS`, `OPEN_FILE_MANAGER`, `SHOW_SYSTEM_INFO`, `TAKE_SCREENSHOT`, `EXIT_APPLICATION` | **Implemented** | One-shot control center, terminal, screenshot capture, and non-sensitive hardware info. |
-| `processes` | Process Management | `LIST_PROCESSES`, `KILL_PROCESS` | **Stub / Planned** | Registered in capability registry foundation; returns `STATUS_NOT_SUPPORTED` in v0.1.1. |
-| `windows` | Window Management | `MINIMIZE_WINDOW`, `MAXIMIZE_WINDOW` | **Stub / Planned** | Registered in capability registry foundation; returns `STATUS_NOT_SUPPORTED` in v0.1.1. |
-| `notifications`| Desktop Notifications | `SEND_NOTIFICATION` | **Stub / Planned** | Registered in capability registry foundation; returns `STATUS_NOT_SUPPORTED` in v0.1.1. |
-| `clipboard` | Clipboard Manager | `GET_CLIPBOARD`, `SET_CLIPBOARD` | **Stub / Planned** | Registered in capability registry foundation; returns `STATUS_NOT_SUPPORTED` in v0.1.1. |
-
-> **Note on Stubs:** Capabilities marked *Stub / Planned* define the architectural contracts for upcoming releases. They safely report `STATUS_NOT_SUPPORTED` with `executed=False` and do not simulate false execution.
+| `system` | System Utilities | `OPEN_TERMINAL`, `OPEN_SETTINGS`, `OPEN_FILE_MANAGER`, `SHOW_SYSTEM_INFO`, `TAKE_SCREENSHOT`, `EXIT_APPLICATION`, `RESET_CONTEXT` | **Implemented** | Control center, terminal, screenshot capture, hardware info, and context memory wiping. |
+| `processes` | Process Management | `LIST_PROCESSES`, `KILL_PROCESS` | **Stub / Foundation** | Architectural contract foundation; safely returns `STATUS_NOT_SUPPORTED`. |
+| `windows` | Window Management | `MINIMIZE_WINDOW`, `MAXIMIZE_WINDOW` | **Stub / Foundation** | Architectural contract foundation; safely returns `STATUS_NOT_SUPPORTED`. |
+| `notifications`| Desktop Notifications | `SEND_NOTIFICATION` | **Stub / Foundation** | Architectural contract foundation; safely returns `STATUS_NOT_SUPPORTED`. |
+| `clipboard` | Clipboard Manager | `GET_CLIPBOARD`, `SET_CLIPBOARD` | **Stub / Foundation** | Architectural contract foundation; safely returns `STATUS_NOT_SUPPORTED`. |
 
 ---
 
-## 🌐 Language Packs
+## 🧠 Context-Aware Interaction & Pronoun Resolution
 
-Language packs reside under `languages/<code >/` and are auto-discovered at boot:
+R.I.A.T.A v0.2.0 introduces multi-turn entity and reference resolution:
 
-```text
-languages/
-└── fa/
-    ├── manifest.json        # Pack metadata, language code, script patterns
-    ├── intents.json         # Regex grammar and intent matching patterns
-    ├── normalization.json   # Character mappings, diacritics, stop particles
-    ├── entities.json        # Standard XDG folders, ordinals (e.g. اول، دوم)
-    ├── responses.json       # Localized natural feedback templates
-    ├── conversational.json  # Affirmations, cancellations, vague phrase rules
-    └── rules.py             # Optional language-specific rule hooks
-```
+### 1. Pronoun and Deictic References
+* **Persian:**
+  - `فایرفاکس رو باز کن` (Turn 1: Firefox opens, `active_app="firefox"`)
+  - `ببندش` (Turn 2: Suffix pronoun `-ش` resolves to Firefox -> `CLOSE_APPLICATION: firefox`)
+  - `پوشه Downloads رو باز کن` (Turn 3: `active_directory="~/Downloads"`)
+  - `داخلش فایل notes.txt رو بساز` (Turn 4: `CREATE_FILE` in `~/Downloads/notes.txt`)
+* **English:**
+  - `Open Firefox` -> `Close it`
+  - `Open Downloads` -> `In it create notes.txt`
 
-### ⚠️ Language Pack Trust & Code Execution
-`rules.py` is a Python module executed within the assistant's process context to evaluate language-specific edge cases.  
-**Security Requirement:** Language packs containing Python code must be installed **only from trusted sources**. When importing third-party language packs, verify the contents of `rules.py`. If a pack has syntax errors or invalid imports, the loader safely quarantines the rule hook and falls back to JSON definitions without crashing.
+### 2. Multi-Candidate Ambiguity Detection
+If multiple candidate applications are currently open:
+* User: `کروم و فایرفاکس باز هستند` (Declares open apps)
+* User: `ببندش`
+* R.I.A.T.A: `چند برنامه باز هستند (Chrome, Firefox). لطفاً مشخص کنید کدام را ببندم؟` (Returns `STATUS_NEEDS_CLARIFICATION`)
+
+### 3. Context Lifetime & Memory Reset
+* Context can be deterministically wiped at any turn:
+  - User: `فراموش کن` or `Reset context`
+  - R.I.A.T.A: `زمینه گفت‌وگو پاکسازی شد.` (Active entities and session tokens cleared)
 
 ---
 
 ## 🛡️ Security Model & Policy Engine
 
-R.I.A.T.A uses a three-tier permission model evaluated **before** execution:
+R.I.A.T.A uses an authoritative three-tier permission model evaluated **before** execution:
 
 ```text
-    Intent Received
-          │
-          ├── Is dangerous command? (rm, sudo, mkfs, dd, forkbomb) ────► DENY (Blocked)
-          │
-          ├── Is high risk? (SHUTDOWN, RESTART, DELETE_FILE) ─────────► CONFIRM (Requires User Confirmation)
-          │
-          └── Is standard desktop operation? ────────────────────────► ALLOW (Permitted)
+    Intent / Command Step
+           │
+           ├── Is dangerous command? (rm -rf, sudo, mkfs, dd, forkbomb) ────► DENY (Blocked)
+           │
+           ├── Is high risk? (DELETE_FILE, DELETE_FOLDER, SHUTDOWN) ───────► CONFIRM (Requires Confirmation Token)
+           │
+           └── Is standard desktop operation? ─────────────────────────────► ALLOW (Permitted)
 ```
 
 ### 1. Filesystem Containment Sandbox
 * Target paths are strictly resolved via `Path.resolve()` and tested with `Path.relative_to(Path.home())`.
-* Directory traversal (`../`), symlink escape attacks to `/etc` or `/var`, and sibling prefix bypasses (`/home/user2` vs `/home/user`) are systematically rejected with `STATUS_PATH_NOT_ALLOWED`.
-* Protected user subdirectories (`.ssh`, `.gnupg`, `.pki`, `.aws`, `.docker`, `.kube`, `.password-store`) are blocked from generic file/folder commands.
+* Directory traversal (`../`), symlink escapes to `/etc`, and sibling prefix bypasses (`/home/user2` vs `/home/user`) are systematically rejected with `STATUS_PATH_NOT_ALLOWED`.
+* Protected user subdirectories (`.ssh`, `.gnupg`, `.pki`, `.aws`, `.docker`, `.kube`, `.password-store`) are rejected from generic file/folder operations.
 
-### 2. Command Execution Safety
-* Zero usage of `shell=True` or shell string concatenation across all executors.
-* Executables are validated against the allowlisted Application Registry.
-* Destructive keywords (`rm`, `sudo`, `mkfs`, `dd`, `chmod`, `chown`, `:(){ :|:& };:`, etc.) are intercepted with `STATUS_PERMISSION_DENIED`.
+### 2. Subprocess Safety
+* **Zero `shell=True`:** 100% verified across the entire codebase.
+* Executables are strictly matched against the allowlisted Application Registry.
+* Arguments are passed as sanitized arrays directly to `subprocess.Popen` / `subprocess.run`.
 
-### 3. Web Companion Security Boundary
-* **Local Loopback Only:** The development server is bound strictly to `127.0.0.1:3000` (loopback only) and is not exposed to external networks or LAN interfaces.
-* **Strict Browser Guardrails:** Enforces `Sec-Fetch-Site` restrictions, Host loopback validation, Origin verification, and a companion client identifier header (`X-RIATA-Client: web-v0.1.1`). Cross-site or non-loopback requests are rejected with HTTP 403 Forbidden.
-* **Timeout & Payload Limits:** Subprocess execution has an enforced 15-second timeout and 16KB payload limit.
+### 3. Non-Replayable Confirmation Tokens
+* When a high-risk intent (e.g. `DELETE_FILE`) is requested, the system creates a unique, expiring `PendingConfirmation` token.
+* Confirmation with `بله` / `yes` consumes and invalidates the token. Repeating `بله` on subsequent turns will **not** replay the dangerous action.
+* Cancellation with `خیر` / `no` immediately destroys the token.
 
 ---
 
 ## 🖥️ User Interfaces
 
-R.I.A.T.A provides two complementary interfaces:
-
-### 1. PySide6 Desktop GUI (Primary Desktop App)
-* **Target:** Linux desktop users (Ubuntu / GNOME / X11 / Wayland).
-* **Stack:** Native Qt 6 / PySide6.
+### 1. PySide6 Desktop GUI (Primary Ubuntu Desktop App)
+* **Stack:** Qt 6 / PySide6.
 * **Features:**
-  * Asynchronous QThread worker execution (UI thread never freezes).
-  * Dynamic live RTL / LTR layout switching (Persian right-to-left, English left-to-right).
-  * Smooth theme toggling (Dark and Light themes).
-  * Multi-session conversational history threads.
-  * Disambiguation selection cards and typing indicators.
+  - Asynchronous execution worker thread.
+  - Live RTL / LTR layout switching (Persian right-to-left, English left-to-right).
+  - Dark and Light desktop themes.
+  - Interactive multi-turn chat timeline.
 
-To run:
+To launch:
 ```bash
 python main.py
 ```
 
-### 2. React / Web Companion (Development & Simulation Environment)
-* **Target:** Developers, browser-based inspection, and test runner.
+### 2. React Web Companion (Development, Simulation & Test Suite)
 * **Stack:** React 19, TypeScript, Tailwind CSS, Vite.
 * **Features:**
-  * Live Intent Engine Inspector (inspect confidence scores, extracted entities, and safety flags).
-  * One-click interactive `pytest` test runner in the browser.
-  * Dry-Run toggle to simulate commands without invoking Linux system binaries.
+  - Live Session Context Bar (inspect `active_app`, `active_directory`, `active_file`, open apps count).
+  - Multi-Step Plan visualizer with step statuses and dependency tracking.
+  - Interactive one-click Confirmation Action Bar (`بله` / `خیر`).
+  - Interactive Disambiguation selection buttons.
+  - In-browser live execution of all **108 automated unit tests**.
 
-To run:
+To launch:
 ```bash
 npm run dev
 ```
@@ -189,15 +196,8 @@ npm run dev
 
 ## 🧪 Testing
 
-The test suite contains **73 comprehensive unit and regression tests** covering:
-* Core Intent matching, entity extraction, and normalization
-* Filesystem sandbox containment, symlink escape rejection, and prefix bypass prevention
-* Policy Engine risk levels (`ALLOW`, `CONFIRM`, `DENY`) and confirmation cycles
-* Extensible language pack registry and third-language runtime loading
-* PySide6 GUI components in offscreen mode
-* Dry-run simulation and honest execution reporting
+The test suite contains **108 automated unit and regression tests** across 17 test modules:
 
-To run all automated tests:
 ```bash
 # Run pytest directly
 pytest -v
@@ -206,6 +206,15 @@ pytest -v
 npm test
 ```
 
+Test coverage includes:
+* `test_v020_context.py`: SessionContext isolation, turn history, and confirmation token lifecycles.
+* `test_v020_entity_resolution.py`: Pronoun resolution, locative container particles, and ambiguity detection in Persian and English.
+* `test_v020_planner.py`: Multi-step command splitting, plan generation, step dependencies, and failure isolation.
+* `test_v020_policy.py`: High-risk confirmation gating, non-replayability, and policy denials.
+* `test_v020_capabilities.py`: Application closing, URL opening, file and folder creation and deletion.
+* `test_v020_language_context.py`: Full multi-turn contextual flows in Persian and English.
+* `test_v020_security_regressions.py`: Zero `shell=True` verification, path traversal rejection, credential protection, and injection prevention.
+
 ---
 
 ## 🚀 Installation & Getting Started
@@ -213,58 +222,36 @@ npm test
 ### Prerequisites:
 * **Ubuntu Linux 20.04+** (Ubuntu 22.04 LTS or 24.04 LTS recommended)
 * **Python 3.10+** (Python 3.10, 3.11, 3.12, 3.13)
-* **Node.js 22** (optional, for web development companion)
+* **Node.js 20+** (optional, for web development companion)
 
-### 1. Clone the Repository
+### 1. Clone & Setup
 ```bash
 git clone https://github.com/MRThugh/RIATA.git
 cd RIATA
-```
 
-### 2. Set Up Virtual Environment & Dependencies
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install runtime dependencies
-pip install -r requirements.txt
-
-# Or install all development & testing dependencies
 pip install -r requirements-dev.txt
 ```
 
-### 3. Launch R.I.A.T.A
+### 2. Run Modes
 ```bash
 # Launch Desktop GUI
 python main.py
 
-# Launch in Dry-Run mode (simulates actions safely)
-python main.py --dry-run
-
-# Launch in CLI terminal mode
+# Launch CLI Interactive Mode
 python main.py --cli
 
-# Launch with verbose debug logs
-python main.py --debug
+# Launch Dry-Run Simulation Mode
+python main.py --dry-run
+
+# Launch Web Companion
+npm run dev
 ```
 
 ---
 
-## 📊 Current Release Status: v0.1.1
-
-> **Status:** **Foundation & Stabilization Release**
-
-Version **0.1.1** is a stabilization and security hardening release focused on:
-* Consolidating architecture across Intent Engine, Policy Engine, and Capability Registry.
-* Eliminating security vulnerabilities in filesystem traversal and local API bridges.
-* Establishing reproducible test environments and CI workflows.
-* Unifying documentation, terminology, and version consistency.
-
-No experimental autonomous agents or LLM bloat have been introduced. This release establishes a solid foundation for upcoming v0.2 desktop enhancements.
-
----
-
-## 👨‍💻 Author & Open Source
+## 👨‍💻 Author & License
 
 Created and maintained by **Ali Kamrani ([MRThugh](https://github.com/MRThugh))**.  
-Released under the **MIT License**. Contributions and feedback are welcome!
+Released under the **MIT License**.

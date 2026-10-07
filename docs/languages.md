@@ -1,5 +1,5 @@
 # R.I.A.T.A — Language Pack System
-**Responsive Intent Automation & Task Assistant (v0.1.1)**  
+**Responsive Intent Automation & Task Assistant (v0.2.0)**  
 **Author:** Ali Kamrani (MRThugh)  
 
 ---

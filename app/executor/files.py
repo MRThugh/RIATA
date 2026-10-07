@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Optional
 
 from app.core.config import get_config
-from app.core.constants import INTENT_OPEN_FILE, INTENT_OPEN_FOLDER
+from app.core.constants import (
+    INTENT_CREATE_FILE,
+    INTENT_CREATE_FOLDER,
+    INTENT_DELETE_FILE,
+    INTENT_DELETE_FOLDER,
+    INTENT_OPEN_FILE,
+    INTENT_OPEN_FOLDER,
+)
 from app.core.logger import get_logger
 from app.engine.intent import Intent
 from app.executor.result import (
@@ -321,3 +328,341 @@ def execute_open_file(intent: Intent) -> ExecutionResult:
             params={"file_name": resolved.name},
             error=str(e),
         )
+
+
+def execute_create_file(intent: Intent) -> ExecutionResult:
+    """Safely create an empty file strictly inside the allowed user sandbox."""
+    config = get_config()
+    file_name = intent.entities.get("file")
+    folder_name = intent.entities.get("folder")
+
+    if not file_name:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="clarify_general",
+            params={},
+        )
+
+    # Determine base directory
+    base_dir = Path.home()
+    if folder_name:
+        resolved_folder = resolve_folder_path(folder_name)
+        if resolved_folder and resolved_folder.is_dir():
+            base_dir = resolved_folder
+
+    target_candidate = (base_dir / file_name).expanduser()
+    try:
+        resolved_target = target_candidate.resolve(strict=False)
+    except Exception as e:
+        logger.warning("Failed resolving target creation file %s: %s", file_name, e)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="file_not_found",
+            params={"file_name": file_name},
+            error="Invalid path",
+        )
+
+    # Security: strict containment check within user sandbox
+    if not is_allowed_path(resolved_target, allow_tmp=True):
+        logger.warning("File creation path rejected outside sandbox: %s", resolved_target)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved_target.name},
+            error="Target path outside allowed sandbox",
+        )
+
+    if config.dry_run:
+        return ExecutionResult(
+            success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="file_created",
+            params={"file_name": resolved_target.name},
+            is_dry_run=True,
+            action_summary=f"touch {resolved_target} [DRY RUN]",
+        )
+
+    try:
+        # Ensure parent directory exists
+        resolved_target.parent.mkdir(parents=True, exist_ok=True)
+        resolved_target.touch(exist_ok=True)
+        logger.info("Successfully created file: %s", resolved_target)
+        return ExecutionResult(
+            success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="file_created",
+            params={"file_name": resolved_target.name},
+            action_summary=f"Created {resolved_target.name}",
+        )
+    except Exception as e:
+        logger.error("Failed creating file %s: %s", resolved_target, e)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
+            intent_name=INTENT_CREATE_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved_target.name},
+            error=str(e),
+        )
+
+
+def execute_delete_file(intent: Intent) -> ExecutionResult:
+    """Safely delete a file strictly inside the allowed user sandbox."""
+    config = get_config()
+    file_name = intent.entities.get("file")
+    if not file_name:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="clarify_general",
+            params={},
+        )
+
+    # Resolve target path relative to home or specified path
+    folder_name = intent.entities.get("folder")
+    base_dir = Path.home()
+    if folder_name:
+        resolved_folder = resolve_folder_path(folder_name)
+        if resolved_folder and resolved_folder.is_dir():
+            base_dir = resolved_folder
+
+    target_candidate = Path(file_name).expanduser()
+    if not target_candidate.is_absolute():
+        target_candidate = base_dir / file_name
+
+    try:
+        resolved_target = target_candidate.resolve(strict=False)
+    except Exception as e:
+        logger.warning("Failed resolving deletion target %s: %s", file_name, e)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_not_found",
+            params={"file_name": file_name},
+            error="Invalid path",
+        )
+
+    # Security check: strict sandbox containment
+    if not is_allowed_path(resolved_target, allow_tmp=True):
+        logger.warning("File deletion path rejected outside sandbox: %s", resolved_target)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved_target.name},
+            error="Target path outside allowed sandbox",
+        )
+
+    if config.dry_run:
+        return ExecutionResult(
+            success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_deleted",
+            params={"file_name": resolved_target.name},
+            is_dry_run=True,
+            action_summary=f"rm {resolved_target} [DRY RUN]",
+        )
+
+    if not resolved_target.is_file():
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_FAILED,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved_target.name},
+            error="File does not exist",
+        )
+
+    try:
+        resolved_target.unlink()
+        logger.info("Successfully deleted file: %s", resolved_target)
+        return ExecutionResult(
+            success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_deleted",
+            params={"file_name": resolved_target.name},
+            action_summary=f"Deleted {resolved_target.name}",
+        )
+    except Exception as e:
+        logger.error("Failed deleting file %s: %s", resolved_target, e)
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
+            intent_name=INTENT_DELETE_FILE,
+            message_key="file_not_found",
+            params={"file_name": resolved_target.name},
+            error=str(e),
+        )
+
+
+def execute_create_folder(intent: Intent) -> ExecutionResult:
+    """Safely create a directory inside user home."""
+    config = get_config()
+    folder_name = intent.entities.get("folder")
+    if not folder_name:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="clarify_folder",
+            params={},
+        )
+
+    target_candidate = (Path.home() / folder_name).expanduser()
+    try:
+        resolved_target = target_candidate.resolve(strict=False)
+    except Exception as e:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error=str(e),
+        )
+
+    if not is_allowed_path(resolved_target, allow_tmp=True):
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error="Target path outside allowed sandbox",
+        )
+
+    if config.dry_run:
+        return ExecutionResult(
+            success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="folder_opened",
+            params={"folder_name": resolved_target.name},
+            is_dry_run=True,
+            action_summary=f"mkdir -p {resolved_target} [DRY RUN]",
+        )
+
+    try:
+        resolved_target.mkdir(parents=True, exist_ok=True)
+        return ExecutionResult(
+            success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="folder_opened",
+            params={"folder_name": resolved_target.name},
+            action_summary=f"Created folder {resolved_target.name}",
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
+            intent_name=INTENT_CREATE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error=str(e),
+        )
+
+
+def execute_delete_folder(intent: Intent) -> ExecutionResult:
+    """Safely delete an empty directory inside user home."""
+    config = get_config()
+    folder_name = intent.entities.get("folder")
+    if not folder_name:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_INVALID_COMMAND,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="clarify_folder",
+            params={},
+        )
+
+    resolved_folder = resolve_folder_path(folder_name)
+    if not resolved_folder or not resolved_folder.is_dir():
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_FAILED,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error="Directory does not exist",
+        )
+
+    if not is_allowed_path(resolved_folder, allow_tmp=True):
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_PATH_NOT_ALLOWED,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error="Path outside allowed sandbox",
+        )
+
+    if config.dry_run:
+        return ExecutionResult(
+            success=True,
+            executed=False,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": resolved_folder.name},
+            is_dry_run=True,
+            action_summary=f"rmdir {resolved_folder} [DRY RUN]",
+        )
+
+    try:
+        resolved_folder.rmdir()
+        return ExecutionResult(
+            success=True,
+            executed=True,
+            status=STATUS_SUCCESS,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": resolved_folder.name},
+            action_summary=f"Deleted folder {resolved_folder.name}",
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False,
+            executed=False,
+            status=STATUS_EXECUTION_ERROR,
+            intent_name=INTENT_DELETE_FOLDER,
+            message_key="folder_not_found",
+            params={"folder_name": folder_name},
+            error=str(e),
+        )
+

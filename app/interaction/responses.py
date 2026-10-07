@@ -55,8 +55,16 @@ class ResponseEngine:
             )
 
         # 2. Confirmation required
-        if policy and policy.requires_confirmation:
-            action_label = policy.action_label or intent.name
+        if (policy and policy.requires_confirmation) or result.status == "NEEDS_CONFIRMATION":
+            if result.message and ("تأیید" in result.message or "Are you sure" in result.message):
+                return result.message
+            if intent.name == "DELETE_FILE" and intent.entities.get("file"):
+                return pack.get_response(
+                    "confirm_delete_file",
+                    default=f"Are you sure you want to delete {intent.entities['file']}? (yes / no)",
+                    file_name=intent.entities["file"],
+                )
+            action_label = (policy.action_label if policy else None) or intent.name
             return pack.get_response(
                 "confirm_action",
                 default="Are you sure you want to {action}? (yes / no)",
@@ -64,9 +72,11 @@ class ResponseEngine:
             )
 
         # 3. Clarification requested
-        if intent.is_clarification_needed or intent.name == INTENT_CLARIFY:
+        if intent.is_clarification_needed or intent.name in (INTENT_CLARIFY, "CLARIFY_AMBIGUITY") or result.status == "NEEDS_CLARIFICATION":
             if intent.clarification_prompt:
                 return intent.clarification_prompt
+            if result.message:
+                return result.message
             return pack.get_response(
                 "clarify_general",
                 default="Could you please clarify what you would like to do?",

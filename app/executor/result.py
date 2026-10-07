@@ -17,6 +17,11 @@ STATUS_APP_NOT_FOUND: Final[str] = "APP_NOT_FOUND"
 STATUS_NOT_SUPPORTED: Final[str] = "NOT_SUPPORTED"
 STATUS_TIMEOUT: Final[str] = "TIMEOUT"
 STATUS_EXECUTION_ERROR: Final[str] = "EXECUTION_ERROR"
+STATUS_PARTIAL_SUCCESS: Final[str] = "PARTIAL_SUCCESS"
+STATUS_NEEDS_CONFIRMATION: Final[str] = "NEEDS_CONFIRMATION"
+STATUS_NEEDS_CLARIFICATION: Final[str] = "NEEDS_CLARIFICATION"
+STATUS_UNSUPPORTED: Final[str] = "UNSUPPORTED"
+STATUS_CANCELLED: Final[str] = "CANCELLED"
 
 
 @dataclass
@@ -30,6 +35,8 @@ class ExecutionResult:
     - `status`: machine-readable status code.
     - `message`: human-readable status message.
     - `data`: optional structured payload.
+    - `step_id`: optional step identifier in multi-step plans.
+    - `metadata`: optional arbitrary key-value metadata.
     """
 
     success: bool
@@ -45,6 +52,8 @@ class ExecutionResult:
     error: Optional[str] = None
     requires_context: bool = False
     context_data: dict[str, Any] = field(default_factory=dict)
+    step_id: Optional[int] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result to serializable dictionary."""
@@ -62,4 +71,6 @@ class ExecutionResult:
             "error": self.error,
             "requires_context": self.requires_context,
             "context_data": self.context_data,
+            "step_id": self.step_id,
+            "metadata": self.metadata,
         }

@@ -79,12 +79,12 @@ class EntityExtractor:
         # 2. Declarative extraction
         entities: dict[str, Any] = {}
 
-        if intent_name == INTENT_OPEN_APPLICATION:
+        if intent_name in (INTENT_OPEN_APPLICATION, "CLOSE_APPLICATION"):
             app_entity = self._extract_application(normalized_text, pack, raw_text)
             if app_entity:
                 entities["application"] = app_entity
 
-        elif intent_name == INTENT_OPEN_FOLDER:
+        elif intent_name in (INTENT_OPEN_FOLDER, "CREATE_FOLDER", "DELETE_FOLDER"):
             folder_entity = self._extract_folder(normalized_text, pack)
             if folder_entity:
                 entities["folder"] = folder_entity
@@ -94,12 +94,29 @@ class EntityExtractor:
             if song_entity:
                 entities["song"] = song_entity
 
-        elif intent_name == INTENT_OPEN_FILE:
-            file_entity = self._extract_file(normalized_text, pack)
+        elif intent_name in (INTENT_OPEN_FILE, "CREATE_FILE", "DELETE_FILE"):
+            file_entity = self._extract_file(normalized_text, pack, raw_text=raw_text)
             if file_entity:
                 entities["file"] = file_entity
+            folder_entity = self._extract_folder(normalized_text, pack)
+            if folder_entity:
+                entities["folder"] = folder_entity
+
+        elif intent_name == "OPEN_URL":
+            entities["url"] = self._extract_url(normalized_text, raw_text)
 
         return entities
+
+    def _extract_url(self, text: str, raw_text: str) -> str:
+        """Extract web URL or domain."""
+        cleaned = text.strip()
+        m = re.search(r"(https?://\S+)", raw_text)
+        if m:
+            return m.group(1)
+        for token in cleaned.split():
+            if "." in token and not token.endswith(".") and "/" not in token:
+                return token
+        return cleaned
 
     def _extract_application(
         self, text: str, pack: LanguagePack, raw_text: str
@@ -197,9 +214,16 @@ class EntityExtractor:
             return m.group(0).strip()
         return extracted.title()
 
-    def _extract_file(self, text: str, pack: LanguagePack) -> Optional[str]:
+    def _extract_file(self, text: str, pack: LanguagePack, raw_text: str = "") -> Optional[str]:
         """Extract target file path or name."""
         cleaned = text.strip()
+
+        # Check raw_text first for filenames with extension (e.g. test.txt, report.pdf)
+        if raw_text:
+            m = re.search(r"\b([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]{1,5})\b", raw_text)
+            if m:
+                return m.group(1).strip()
+
         patterns = pack.entities.get("file_patterns", [])
 
         for pat in patterns:
@@ -208,6 +232,14 @@ class EntityExtractor:
                 extracted = m.groupdict().get("file") if "file" in m.groupdict() else m.group(1)
                 if extracted:
                     return extracted.strip()
+
+        # Fallback for filenames with extension (e.g. test.txt, report.pdf)
+        m = re.search(r"\b([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]{1,5})\b", cleaned)
+        if m:
+            return m.group(1).strip()
+
+        if cleaned in ("حذفش کن", "پاکش کن", "delete it", "ببندش"):
+            return "ش"
 
         return None
 

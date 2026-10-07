@@ -26,6 +26,7 @@ HIGH_RISK_INTENTS: set[str] = {
     "POWEROFF",
     "DELETE_FILE",
     "DELETE_DIRECTORY",
+    "DELETE_FOLDER",
 }
 
 
@@ -59,6 +60,11 @@ class PolicyEngine:
         # 3. Check high-risk actions requiring user confirmation
         if intent.name in HIGH_RISK_INTENTS:
             action_desc = intent.name.replace("_", " ").lower()
+            if intent.name == "DELETE_FILE" and intent.entities.get("file"):
+                action_desc = f"delete {intent.entities['file']}"
+            elif intent.name in ("DELETE_FOLDER", "DELETE_DIRECTORY") and intent.entities.get("folder"):
+                action_desc = f"delete {intent.entities['folder']}"
+
             logger.info("Policy CONFIRM: Intent %s requires user confirmation", intent.name)
             return PolicyEvaluation(
                 decision=DECISION_CONFIRM,

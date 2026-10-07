@@ -32,6 +32,13 @@
   "confirm_action": "آیا مطمئن هستید که می‌خواهید {action} را انجام دهید؟ (بله / خیر)",
   "action_cancelled": "عملیات لغو شد.",
   "action_confirmed": "عملیات با موفقیت تایید شد.",
-  "action_denied": "⚠️ این عملیات به دلیل محدودیت‌های امنیتی مجاز نیست.",
-  "already_running": "{app_name} از قبل در حال اجرا است."
+  "already_running": "{app_name} از قبل در حال اجرا است.",
+  "app_closed": "✓ {app_name} با موفقیت بسته شد.",
+  "app_close_failed": "✕ نتونستم {app_name} رو ببندم.",
+  "file_created": "✓ فایل {file_name} ساخته شد.",
+  "file_deleted": "✓ فایل {file_name} حذف شد.",
+  "url_opened": "✓ آدرس {url} باز شد.",
+  "context_reset": "حافظه گفتگو و زمینه بازنشانی شد.",
+  "confirm_delete_file": "برای حذف {file_name} تأیید میکنی؟ (بله / خیر)",
+  "clarify_ambiguity": "کدوم برنامه رو ببندم؟ {candidates}؟"
 }

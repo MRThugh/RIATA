@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-10-07
+
+### Summary
+Release v0.2.0 is a major platform evolution transforming R.I.A.T.A into a **Context-Aware Interaction Platform**. It introduces multi-turn conversational memory, deterministic entity/reference resolution (pronouns and deictic references), a multi-step Command Planner with failure isolation, single-use security confirmation tokens, and expanded desktop capabilities (`CLOSE_APPLICATION`, `OPEN_URL`, `CREATE_FILE`, `DELETE_FILE`, `CREATE_FOLDER`, `DELETE_FOLDER`). The release strictly preserves R.I.A.T.A's offline, local-first, zero-cloud, deterministic principles with an authoritative Policy Engine and zero `shell=True`.
+
+### Added
+- **Context Engine (`app/core/context/`)**:
+  - `SessionContext`: Isolated session tracking for active application, active directory, active file, declared open applications, and bounded turn history.
+  - `ContextManager`: Thread-safe session lifecycle manager with session isolation and memory-bounded cleanup.
+  - `Deterministic Entity Resolver (`app/core/context/resolver.py`)`: Resolves pronouns and deictic references (Persian: «ببندش», «همونو باز کن», «داخلش» / English: "close it", "open that", "in it") to prior context entities with strict ambiguity detection.
+  - `Single-Use Confirmation Tokens (`PendingConfirmation`)`: Cryptographically and session-bound tokens for high-risk operations (e.g. `DELETE_FILE`), preventing replay attacks and enforcing expiration.
+  - `Context Reset Intent (`RESET_CONTEXT`)`: Deterministic memory wiping via «فراموش کن» or "forget".
+- **Command Planner (`app/engine/planner.py`)**:
+  - Deterministic multi-step parsing splitting conjunctions (Persian « و » / English "and", then, afterwards).
+  - Generates `CommandPlan` with explicit `CommandStep` dependency mapping (`[i - 1]`).
+  - Strict failure isolation: if step `n` fails or is blocked by Policy Engine, subsequent steps `n+1..` are skipped.
+- **Desktop Capabilities Expansion (`app/capabilities/`, `app/executor/`)**:
+  - Applications: Implemented `CLOSE_APPLICATION` (safe `pkill` without shell) and `OPEN_URL` (strict HTTP/HTTPS allowlisting with `xdg-open`).
+  - Filesystem: Implemented `CREATE_FILE`, `DELETE_FILE`, `CREATE_FOLDER`, and `DELETE_FOLDER` inside the sandbox with strict path containment checks.
+- **Web Companion v0.2.0 (`src/App.tsx`, `vite.config.ts`)**:
+  - Live session context state visualization (active app, active directory, active file, open apps count).
+  - Multi-step plan step-by-step visualizer with real-time status indicators.
+  - Interactive one-click confirmation action bar (`بله` / `خیر`).
+  - Interactive disambiguation selection buttons.
+  - In-browser live execution of all 108 pytest tests.
+
+### Changed
+- **Pipeline Evolution**: Extended execution pipeline:
+  `User Input → Language Detection / Normalizer → Intent Engine → Context Engine & Entity Resolver → Command Planner → Policy Engine → Capability Registry → Capability Provider → Executor → OS`.
+- **Policy Engine Authority**: Enforced that neither Context Engine nor Command Planner can ever bypass the Policy Engine.
+- **Version Unification**: Updated version metadata to `0.2.0` across `app/core/constants.py`, `metadata.json`, `package.json`, `pyproject.toml`, `main.py`, and documentation.
+
+### Security
+- **Authoritative Policy Gating**: Every generated step of a multi-step plan is evaluated independently against the Policy Engine.
+- **Non-Replayable Confirmation**: Confirmation tokens are consumed immediately upon positive affirmation and destroyed upon negative cancellation, preventing replay loops.
+- **Subprocess Security Audit**: Confirmed 100% zero occurrences of `shell=True` across the entire codebase.
+- **Filesystem Containment**: File and folder operations enforce strict canonical path resolution within user sandbox (`~`) and `/tmp`, rejecting path traversal escapes and sensitive directories (`~/.ssh`, `/etc`).
+
+### Testing
+- Expanded test suite from 73 to **108 automated unit tests** across 17 test modules:
+  - Added `tests/test_v020_context.py`
+  - Added `tests/test_v020_entity_resolution.py`
+  - Added `tests/test_v020_planner.py`
+  - Added `tests/test_v020_policy.py`
+  - Added `tests/test_v020_capabilities.py`
+  - Added `tests/test_v020_language_context.py`
+  - Added `tests/test_v020_security_regressions.py`
+
+---
+
 ## [0.1.1] - 2026-10-07
 
 ### Summary

@@ -17,6 +17,9 @@ from app.core.constants import (
     CONFIDENCE_MEDIUM,
     DANGEROUS_COMMANDS,
     INTENT_CLARIFY,
+    INTENT_CLOSE_APPLICATION,
+    INTENT_CREATE_FILE,
+    INTENT_DELETE_FILE,
     INTENT_EXIT_APPLICATION,
     INTENT_OPEN_APPLICATION,
     INTENT_OPEN_FILE,
@@ -24,7 +27,9 @@ from app.core.constants import (
     INTENT_OPEN_FOLDER,
     INTENT_OPEN_SETTINGS,
     INTENT_OPEN_TERMINAL,
+    INTENT_OPEN_URL,
     INTENT_PLAY_MUSIC,
+    INTENT_RESET_CONTEXT,
     INTENT_SHOW_SYSTEM_INFO,
     INTENT_TAKE_SCREENSHOT,
     INTENT_UNKNOWN,
@@ -137,7 +142,7 @@ class RuleBasedIntentParser(BaseIntentParser):
             if dangerous in tokens:
                 return True
 
-        if ">" in lowered or "<" in lowered:
+        if ">" in lowered or "<" in lowered or "`" in lowered or "$(" in lowered:
             return True
 
         if re.search(r"\brm\s+-[a-zA-Z]*r", lowered) or re.search(r"\brm\s+", lowered):
@@ -221,6 +226,7 @@ class RuleBasedIntentParser(BaseIntentParser):
 
         # Fixed order of resolution
         fixed_order = [
+            INTENT_RESET_CONTEXT,
             INTENT_EXIT_APPLICATION,
             INTENT_SHOW_SYSTEM_INFO,
             INTENT_TAKE_SCREENSHOT,
@@ -228,7 +234,12 @@ class RuleBasedIntentParser(BaseIntentParser):
             INTENT_OPEN_FILE_MANAGER,
             INTENT_OPEN_SETTINGS,
             INTENT_PLAY_MUSIC,
+            INTENT_CLOSE_APPLICATION,
+            INTENT_DELETE_FILE,
+            INTENT_CREATE_FILE,
+            INTENT_OPEN_FILE,
             INTENT_OPEN_FOLDER,
+            INTENT_OPEN_URL,
             INTENT_OPEN_APPLICATION,
         ]
 

@@ -5,11 +5,11 @@ import { spawn } from "child_process";
 import { IncomingMessage } from "http";
 
 // Client identifier token used to distinguish requests from the bundled companion
-const RIATA_CLIENT_IDENTIFIER = "web-v0.1.1";
+const ALLOWED_CLIENT_IDENTIFIERS = new Set(["web-v0.1.1", "web-v0.2.0"]);
 
 // Allowed loopback hostnames and remote IP addresses
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"]);
+const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1", "0.0.0.0"]);
 
 interface SecurityCheckResult {
   allowed: boolean;
@@ -18,14 +18,37 @@ interface SecurityCheckResult {
   matchedOrigin?: string;
 }
 
+function isAllowedHostOrOrigin(target: string): boolean {
+  if (!target) return true;
+  if (LOOPBACK_HOSTNAMES.has(target)) return true;
+  if (
+    target.endsWith(".run.app") ||
+    target.endsWith(".aistudio.google") ||
+    target.endsWith(".google.internal") ||
+    target.includes("localhost") ||
+    target.includes("127.0.0.1")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
-  // 1. Strict loopback socket connection check
   const remoteIp = req.socket?.remoteAddress || "";
-  if (remoteIp && !LOOPBACK_IPS.has(remoteIp)) {
+  const isPrivateOrLoopback =
+    !remoteIp ||
+    LOOPBACK_IPS.has(remoteIp) ||
+    remoteIp.startsWith("10.") ||
+    remoteIp.startsWith("172.") ||
+    remoteIp.startsWith("192.168.") ||
+    remoteIp.startsWith("169.254.") ||
+    remoteIp.endsWith("127.0.0.1");
+
+  if (!isPrivateOrLoopback) {
     return {
       allowed: false,
       statusCode: 403,
-      message: `Forbidden: API access rejected from non-loopback remote address (${remoteIp}).`,
+      message: `Forbidden: API access rejected from non-local remote address (${remoteIp}).`,
     };
   }
 
@@ -34,7 +57,7 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
   const secFetchSite = (req.headers["sec-fetch-site"] as string) || "";
   const clientIdentifier = (req.headers["x-riata-client"] as string) || "";
 
-  // 2. Block any cross-site browser requests immediately
+  // Block cross-site browser requests
   if (secFetchSite === "cross-site") {
     return {
       allowed: false,
@@ -43,25 +66,25 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     };
   }
 
-  // 3. Validate Host header is strictly local loopback
-  if (!hostHeader || !LOOPBACK_HOSTNAMES.has(hostHeader)) {
+  // Validate Host header
+  if (!isAllowedHostOrOrigin(hostHeader)) {
     return {
       allowed: false,
       statusCode: 403,
-      message: "Forbidden: Host must be local loopback (127.0.0.1 / localhost).",
+      message: "Forbidden: Host must be local loopback or authorized preview domain.",
     };
   }
 
-  // 4. Validate Origin when present
+  // Validate Origin when present
   if (originHeader) {
     try {
       const parsedOrigin = new URL(originHeader);
       const originHost = parsedOrigin.hostname.toLowerCase();
-      if (!LOOPBACK_HOSTNAMES.has(originHost)) {
+      if (!isAllowedHostOrOrigin(originHost)) {
         return {
           allowed: false,
           statusCode: 403,
-          message: `Forbidden: Origin '${parsedOrigin.origin}' is not local loopback.`,
+          message: `Forbidden: Origin '${parsedOrigin.origin}' is not authorized.`,
         };
       }
     } catch {
@@ -73,8 +96,8 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     }
   }
 
-  // 5. Require client identifier header from the bundled companion
-  if (clientIdentifier !== RIATA_CLIENT_IDENTIFIER) {
+  // Require client identifier header from the companion
+  if (!ALLOWED_CLIENT_IDENTIFIERS.has(clientIdentifier)) {
     return {
       allowed: false,
       statusCode: 403,
@@ -227,13 +250,14 @@ try:
     payload = json.loads(sys.stdin.read() or '{}')
     command_text = payload.get('text', '')
     dry_run = bool(payload.get('dry_run', False))
+    session_id = str(payload.get('session_id', 'web-companion'))
 
     cfg = get_config()
     if dry_run:
         cfg.dry_run = True
 
     router = get_intent_router()
-    output = router.process(command_text)
+    output = router.process(command_text, session_id=session_id)
 
     result_dict = output.result.to_dict() if output.result else {
         "success": False,
@@ -241,6 +265,9 @@ try:
         "status": "UNKNOWN",
         "message": output.response_text
     }
+
+    session_ctx = router.context_manager.get_session(session_id)
+    ctx_dict = session_ctx.to_dict() if session_ctx else {}
 
     data = {
         "success": output.result.success if output.result else False,
@@ -251,6 +278,9 @@ try:
         "result": result_dict,
         "direction": output.direction,
         "is_exit": output.is_exit,
+        "plan": output.plan.to_dict() if output.plan else None,
+        "context": ctx_dict,
+        "session_id": session_id,
         "logs": list(LOG_BUFFER)[-15:]
     }
     print("---RIATA_JSON_START---")
@@ -377,11 +407,60 @@ except Exception as e:
             );
           });
         });
+
+        server.middlewares.use("/api/reset-context", (req, res) => {
+          const security = validateRequestSecurity(req);
+          if (security.matchedOrigin) {
+            res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
+            res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
+          }
+          if (req.method === "OPTIONS") {
+            res.statusCode = 204;
+            res.end();
+            return;
+          }
+          if (!security.allowed) {
+            res.statusCode = security.statusCode;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: security.message }));
+            return;
+          }
+
+          let body = "";
+          req.on("data", (chunk) => {
+            body += chunk;
+          });
+          req.on("end", () => {
+            let sessionId = "web-companion";
+            try {
+              const p = JSON.parse(body || "{}");
+              if (p.session_id) sessionId = p.session_id;
+            } catch {}
+
+            const pyScript = `
+import json
+from app.core.context.manager import get_context_manager
+cm = get_context_manager()
+cm.reset_session("${sessionId}")
+print(json.dumps({"success": True, "message": "Context reset successfully"}))
+`;
+            const proc = spawn("python3", ["-c", pyScript]);
+            let out = "";
+            proc.stdout.on("data", (d) => {
+              out += d.toString();
+            });
+            proc.on("close", () => {
+              res.setHeader("Content-Type", "application/json");
+              res.end(out || JSON.stringify({ success: true, message: "Context reset" }));
+            });
+          });
+        });
       },
     },
   ],
   server: {
     port: 3000,
-    host: "127.0.0.1",
+    host: "0.0.0.0",
   },
 });

@@ -1,5 +1,5 @@
 # R.I.A.T.A — Architecture Overview
-**Responsive Intent Automation & Task Assistant (v0.1.1)**  
+**Responsive Intent Automation & Task Assistant (v0.2.0)**  
 **Author:** Ali Kamrani (MRThugh)  
 **License:** MIT  
 **Platform:** Ubuntu Linux  
@@ -8,28 +8,31 @@
 
 ## 1. Architectural Philosophy
 
-R.I.A.T.A v0.1.1 is built upon a strict **Unidirectional Processing Pipeline** with clear separation of concerns:
+R.I.A.T.A v0.2.0 is an offline, local-first **Context-Aware Interaction Platform** built upon a strict **Unidirectional Processing Pipeline** with clear separation of concerns:
 
 ```text
 User Input (Natural Language: Persian or English)
        │
        ▼
-Language System (Registry & Language Packs)
+Language System (Registry & Declarative Language Packs)
        │
        ▼
 Intent Engine (Parser, Matcher, Entity Extractor)
        │
        ▼
-Interaction System (Context, Disambiguation, Confirmation)
+Context Engine & Entity Resolver (Pronouns, Active Entities, Ambiguity)
+       │
+       ▼
+Command Planner (Multi-Step DAG & Dependency Mapping)
        │
        ▼
 Policy Engine (Risk Evaluation: ALLOW, CONFIRM, DENY)
        │
        ▼
-Capability Registry (Applications, Filesystem, Media, System)
+Capability Registry (Modular Capability Routing)
        │
        ▼
-Desktop Capability Provider
+Desktop Capability Provider (Applications, Filesystem, Media, System)
        │
        ▼
 Safe Executor (Direct process invocation — zero shell=True)
@@ -40,9 +43,10 @@ Operating System (Ubuntu Linux Desktop)
 
 ### Core Invariants:
 1. **Language Independence:** An Intent like `OPEN_APPLICATION` with entity `{"application": "firefox"}` is identical whether entered in Persian (`فایرفاکس رو باز کن`) or English (`Open Firefox`).
-2. **Safe Execution:** Arbitrary user strings are **never** evaluated by a shell (`os.system` and `shell=True` are strictly banned). Execution occurs only via validated executables identified through the Application Registry or standard desktop utilities.
-3. **Policy-First Security:** High-risk actions (`SHUTDOWN`, `DELETE_FILE`, `RESTART`) require explicit user confirmation (`CONFIRM`). Malicious commands (`rm`, `sudo`, `mkfs`, fork bombs) are unconditionally rejected (`DENY`).
-4. **Offline & Deterministic:** Version 0.1.1 operates deterministically without cloud NLP services or machine learning models.
+2. **Deterministic Contextual Memory:** Conversational state (`active_app`, `active_directory`, `active_file`, `open_applications`) is tracked in bounded, isolated sessions without heuristic hallucination.
+3. **Multi-Step Command Planning with Failure Isolation:** Commands with multiple clauses (`Chrome رو باز کن و فایل منیجر رو باز کن`) are mapped into a sequential `CommandPlan`. If step `n` fails or is blocked, subsequent steps `n+1..` are skipped.
+4. **Authoritative Policy-First Security:** Neither the Context Engine nor the Command Planner may bypass the Policy Engine. High-risk operations (`DELETE_FILE`, `DELETE_FOLDER`, `SHUTDOWN`) require single-use, non-replayable confirmation tokens (`PendingConfirmation`).
+5. **Zero-Shell Execution:** Arbitrary user strings are **never** evaluated by a shell (`os.system` and `shell=True` are strictly banned). Execution occurs only via validated executables identified through the Application Registry or standard desktop utilities.
 
 ---
 
@@ -52,16 +56,21 @@ Operating System (Ubuntu Linux Desktop)
 RIATA/
 ├── app/
 │   ├── __init__.py
-│   ├── core/                  # Configuration, constants, structured logging
+│   ├── core/                  # Core constants, config, context, and logging
 │   │   ├── config.py          # Configuration and environment loaders
-│   │   ├── constants.py       # Intent names, thresholds, banned commands
-│   │   └── logger.py          # Structured logging with memory ring-buffer
-│   ├── engine/                # Rule-based Intent Engine
+│   │   ├── constants.py       # Intent names, thresholds, version metadata
+│   │   ├── logger.py          # Structured logging with memory ring-buffer
+│   │   └── context/           # v0.2.0 Context Engine
+│   │       ├── models.py      # SessionContext and PendingConfirmation models
+│   │       ├── manager.py     # Thread-safe ContextManager and session isolation
+│   │       └── resolver.py    # Deterministic pronoun and deictic entity resolver
+│   ├── engine/                # Rule-based Intent Engine & Planner
 │   │   ├── intent.py          # Language-independent Intent data model
 │   │   ├── matcher.py         # Pattern matching & confidence scoring
 │   │   ├── normalizer.py      # Multi-language normalization engine
 │   │   ├── entity_extractor.py# Extracts apps, folders, song names
-│   │   ├── router.py          # Orchestrates parsing, policy, capability dispatch
+│   │   ├── planner.py         # v0.2.0 Multi-step Command Planner & DAG
+│   │   ├── router.py          # Orchestrates parsing, context, planner, policy
 │   │   └── task.py            # Async execution and task tracking
 │   ├── languages/             # Extensible language pack registry
 │   │   ├── registry.py        # Central pack discovery and registry
@@ -69,7 +78,7 @@ RIATA/
 │   │   ├── detector.py        # Unicode script range detector
 │   │   └── loader.py          # Backward-compatibility loader facade
 │   ├── interaction/           # Conversational state & responses
-│   │   ├── context.py         # Short-lived turn memory & disambiguation
+│   │   ├── context.py         # Interaction turn memory & selection
 │   │   └── responses.py       # Localized natural feedback generator
 │   ├── policy/                # Risk-aware desktop security engine
 │   │   ├── engine.py          # Evaluates ALLOW, CONFIRM, and DENY
@@ -77,17 +86,17 @@ RIATA/
 │   ├── capabilities/          # Modular desktop capabilities
 │   │   ├── base.py            # Base capability contract
 │   │   ├── registry.py        # Central capability dispatcher
-│   │   ├── applications.py    # Desktop app launcher
-│   │   ├── filesystem.py      # Folder and file navigation
+│   │   ├── applications.py    # Desktop app launcher, closer, URL opener
+│   │   ├── filesystem.py      # Folder and file creator, opener, deleter
 │   │   ├── media.py           # Local audio scanner and playback
-│   │   ├── system.py          # Terminal, settings, sysinfo, screenshot
+│   │   ├── system.py          # Terminal, settings, sysinfo, screenshot, reset
 │   │   ├── processes.py       # Process capability foundation (stub)
 │   │   ├── windows.py         # Window management foundation (stub)
 │   │   ├── notifications.py   # Desktop notifications foundation (stub)
 │   │   └── clipboard.py       # Clipboard foundation (stub)
 │   ├── executor/              # Safe Linux action executors
-│   │   ├── application.py     # Subprocess launcher for applications
-│   │   ├── files.py           # Sandboxed folder and file opener
+│   │   ├── application.py     # App launcher, safe pkill closer, URL opener
+│   │   ├── files.py           # Sandboxed file/folder operations
 │   │   ├── music.py           # ~/Music audio player
 │   │   ├── system.py          # Desktop utilities executor
 │   │   └── result.py          # ExecutionResult data model
@@ -99,32 +108,51 @@ RIATA/
 │       ├── input/             # Message input composer
 │       ├── shell/             # Header bar and collapsible sidebar
 │       └── themes/            # Dark and light theme manager
-├── languages/                 # Modular language packs
+├── languages/                 # Modular declarative language packs
 │   ├── fa/                    # Persian language pack (manifest, intents, rules)
 │   └── en/                    # English language pack
-├── tests/                     # Automated test suite (73 tests)
+├── src/                       # React Web Companion frontend
+│   ├── App.tsx                # Context-aware inspector & interactive UI
+│   └── main.tsx               # Web entrypoint
+├── tests/                     # Automated test suite (108 unit tests)
 ├── docs/                      # Architectural and technical documentation
 ├── main.py                    # Main desktop application entrypoint
 ├── requirements.txt           # Runtime dependencies
 ├── requirements-dev.txt       # Development & test dependencies
-└── pyproject.toml             # Modern package configuration
+├── pyproject.toml             # Modern package configuration
+└── vite.config.ts             # Web Companion server with Python bridge
 ```
 
 ---
 
-## 3. Asynchronous Concurrency
+## 3. Context Engine & Entity Resolver
 
-To ensure the desktop UI remains fluid and responsive:
-* The `MainWindow` employs `QThread` and `QObject` worker patterns (`ExecutionWorker`).
-* Command processing and intent execution run on background threads.
-* UI slots handle completion events on the main thread, guaranteeing that background tasks never freeze the interface.
-* In the event of an unhandled exception, `ExecutionWorker` safely emits a fallback error result, ensuring the user input composer is never permanently locked.
+The **Context Engine** (`app/core/context/`) maintains state across conversation turns:
+* `SessionContext`: Records active entities per isolated session (`session_id`).
+  - `active_app`: Most recently targeted application (e.g. `Firefox`).
+  - `active_directory`: Most recently opened or referenced directory.
+  - `active_file`: Most recently opened or referenced file.
+  - `open_applications`: Set of currently open desktop applications.
+  - `pending_confirmation`: Single-use high-risk confirmation token.
+* `Deterministic Entity Resolver` (`resolver.py`):
+  - Resolves pronouns (Persian `-ش`, `اون`, `همونو` / English `it`, `that`).
+  - Resolves locative containers (Persian `داخلش` / English `in it`, `inside`).
+  - Detects ambiguities when multiple candidates exist and prompts for clarification.
 
 ---
 
-## 4. Policy Engine Lifecycle
+## 4. Command Planner & Multi-Step Execution
 
-Every parsed intent is audited by `PolicyEngine.evaluate(intent)`:
-* **ALLOW:** Low-risk standard operations (opening browser, navigating to Downloads, playing music) proceed directly to capability execution.
-* **CONFIRM:** High-risk system operations (shutdown, reboot, file deletion) establish an interaction state (`AWAITING_CONFIRMATION`). The system prompts the user and executes only upon positive confirmation.
-* **DENY:** Destructive or privileged commands (`rm`, `sudo`, `mkfs`) are intercepted before execution, returning `STATUS_PERMISSION_DENIED` with `executed=False`.
+The **Command Planner** (`app/engine/planner.py`):
+* Splits complex utterances into ordered, individual clauses based on conjunction tokens (`و`, `and`, `then`).
+* Maps step dependencies: step 2 depends on step 1 succeeding.
+* Enforces **failure isolation**: if any step fails or is denied by security policy, subsequent steps are marked `SKIPPED` and not executed.
+
+---
+
+## 5. Policy Engine & Confirmation Tokens
+
+Every executable step passes through `PolicyEngine.evaluate(intent)`:
+* **ALLOW:** Low-risk standard operations proceed directly to capability execution.
+* **CONFIRM:** High-risk operations (`DELETE_FILE`, `DELETE_FOLDER`, `SHUTDOWN`) generate a unique, cryptographically-bound `PendingConfirmation` token with an expiration timestamp. The action executes only upon explicit user confirmation (`بله` / `yes`).
+* **DENY:** Destructive or privileged commands (`rm -rf`, `sudo`, `mkfs`) are unconditionally blocked before execution, returning `STATUS_PERMISSION_DENIED` with `executed=False`.

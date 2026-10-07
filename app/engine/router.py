@@ -1,21 +1,27 @@
 """
-Intent Router and Execution Coordinator for R.I.A.T.A v0.1.1
+Intent Router, Context Coordinator, and Multi-Step Execution for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 
-Architecture:
+Architecture Pipeline:
 User Input
     ↓
-Language System (Packs / Registry)
+Language System (Packs / Detector / Normalizer)
     ↓
-Intent Engine (Parser / Matcher)
+Context Engine & Pending Confirmation Check
     ↓
-Interaction System (Context / Disambiguation / Confirmation)
+Command Planner (Multi-step Decomposition)
     ↓
-Policy Engine (Risk Evaluation: ALLOW, CONFIRM, DENY)
+Contextual Entity Resolution & Ambiguity Check
     ↓
-Capability Registry (Applications, Filesystem, Media, System)
+Policy Engine (Authoritative: ALLOW, CONFIRM, DENY)
     ↓
-Response Engine (Natural localized response)
+Capability Registry (Standardized Capabilities)
+    ↓
+Executor (Zero shell invocation, Sandbox Verification)
+    ↓
+Result & Context Update
+    ↓
+Response Engine (Natural Localized Response)
 """
 
 from dataclasses import dataclass, field
@@ -25,22 +31,34 @@ from app.capabilities.registry import CapabilityRegistry, get_capability_registr
 from app.core.constants import (
     INTENT_CANCEL,
     INTENT_CLARIFY,
+    INTENT_CLARIFY_AMBIGUITY,
     INTENT_CONFIRM,
     INTENT_EXIT_APPLICATION,
+    INTENT_RESET_CONTEXT,
     INTENT_UNKNOWN,
 )
+from app.core.context.manager import ContextManager, get_context_manager
+from app.core.context.models import SessionContext
+from app.core.context.resolver import ContextualEntityResolver
 from app.core.logger import get_logger
 from app.engine.intent import Intent
 from app.engine.matcher import BaseIntentParser, get_intent_parser
+from app.engine.planner import CommandPlan, CommandPlanner, CommandStep, get_command_planner
 from app.executor.result import (
+    STATUS_CANCELLED,
     STATUS_EXECUTION_ERROR,
+    STATUS_FAILED,
     STATUS_INVALID_COMMAND,
+    STATUS_NEEDS_CLARIFICATION,
+    STATUS_NEEDS_CONFIRMATION,
+    STATUS_PARTIAL_SUCCESS,
     STATUS_PERMISSION_DENIED,
     STATUS_SUCCESS,
     ExecutionResult,
 )
 from app.interaction.context import InteractionContext
 from app.interaction.responses import ResponseEngine, get_response_engine
+from app.languages.detector import detect_language
 from app.languages.registry import LanguagePack, LanguageRegistry, get_language_registry
 from app.policy.decision import DECISION_ALLOW, PolicyEvaluation
 from app.policy.engine import PolicyEngine, get_policy_engine
@@ -57,12 +75,14 @@ class ProcessOutput:
     result: Optional[ExecutionResult] = None
     is_exit: bool = False
     direction: str = "ltr"  # 'rtl' or 'ltr'
+    plan: Optional[CommandPlan] = None
+    session_id: str = "default"
 
 
 class IntentRouter:
     """
-    Coordinates Intent understanding, Interaction context, Policy evaluations,
-    Desktop capabilities, and Natural response generation.
+    Coordinates Intent understanding, Context Engine, Command Planner,
+    Authoritative Policy evaluations, Desktop capabilities, and Natural responses.
     """
 
     def __init__(
@@ -71,6 +91,8 @@ class IntentRouter:
         policy_engine: Optional[PolicyEngine] = None,
         capability_registry: Optional[CapabilityRegistry] = None,
         response_engine: Optional[ResponseEngine] = None,
+        planner: Optional[CommandPlanner] = None,
+        context_manager: Optional[ContextManager] = None,
     ) -> None:
         self.parser = parser or get_intent_parser()
         self.policy_engine = policy_engine or get_policy_engine()
@@ -78,28 +100,153 @@ class IntentRouter:
         self.response_generator = response_engine or get_response_engine()
         self.loader: LanguageRegistry = get_language_registry()
 
+        # v0.2.0 Context Engine and Command Planner
+        self.context_manager = context_manager or get_context_manager()
+        self.planner = planner or get_command_planner()
+        self.resolver = ContextualEntityResolver()
+
+        # Backwards compatibility state facades
         self.interaction_context = InteractionContext()
         self.context: dict[str, Any] = {}
 
-    def process(self, user_input: str) -> ProcessOutput:
-        """Parse user command, evaluate policy, execute safely, and respond naturally."""
-        # 1. Check if user input is responding to an active interaction context
-        context_action, context_payload = self.interaction_context.evaluate_turn(user_input)
+    def process(self, user_input: str, session_id: str = "default") -> ProcessOutput:
+        """
+        Process user command through the full v0.2.0 deterministic pipeline.
+        """
+        out = self._do_process(user_input, session_id=session_id)
+        try:
+            self.context_manager.save_session(session_id)
+        except Exception:
+            pass
+        return out
 
-        intent: Optional[Intent] = None
-        is_user_confirmed = False
-        if context_action == "CONFIRM":
-            # User confirmed the pending high-risk intent!
-            intent = context_payload
-            is_user_confirmed = True
-            logger.info("Confirmed pending intent: %s", intent.name if intent else "")
-        elif context_action == "CANCEL":
-            # User cancelled the pending interaction
-            pack = self.loader.get(self.interaction_context.language)
+    def _do_process(self, user_input: str, session_id: str = "default") -> ProcessOutput:
+        cleaned_input = (user_input or "").strip()
+        session_ctx = self.context_manager.get_or_create(session_id)
+
+        # Detect language early
+        lang = detect_language(cleaned_input) if cleaned_input else "en"
+        pack: LanguagePack = self.loader.get(lang)
+        direction = pack.direction
+
+        # =====================================================================
+        # 1. Check for Context Reset Intent ("فراموشش کن", "reset context", etc.)
+        # =====================================================================
+        if cleaned_input.lower() in (
+            "فراموشش کن",
+            "شروع دوباره",
+            "بازنشانی",
+            "ریست",
+            "لغو زمینه",
+            "forget it",
+            "reset context",
+            "start over",
+            "clear context",
+        ):
+            self.context_manager.reset(session_id)
+            self.reset_context()
+            reset_intent = Intent(
+                name=INTENT_RESET_CONTEXT,
+                confidence=1.0,
+                raw_text=cleaned_input,
+                language=lang,
+            )
+            res = ExecutionResult(
+                success=True,
+                executed=False,
+                status=STATUS_SUCCESS,
+                intent_name=INTENT_RESET_CONTEXT,
+                message_key="context_reset",
+                message="Conversation context was reset.",
+            )
+            resp_text = self.response_generator.generate(res, reset_intent)
+            return ProcessOutput(
+                response_text=resp_text,
+                intent=reset_intent,
+                result=res,
+                direction=direction,
+                session_id=session_id,
+            )
+
+        # =====================================================================
+        # 2. Check for Active Pending Confirmation Token
+        # =====================================================================
+        pending_conf = self.context_manager.get_pending_confirmation(session_id)
+        if pending_conf or self.interaction_context.awaiting_confirmation:
+            lowered = cleaned_input.lower()
+            if pack.is_confirmation(lowered) or lowered in ("yes", "y", "بله", "آره", "اره", "تایید"):
+                confirmed_intent = None
+                action_label = ""
+                if pending_conf:
+                    confirmed_intent = self.context_manager.consume_pending_confirmation(session_id)
+                    action_label = pending_conf.action_label
+                    self.interaction_context.clear()
+                    self.context.clear()
+                elif self.interaction_context.awaiting_confirmation:
+                    confirmed_intent = self.interaction_context.pending_intent
+                    action_label = self.interaction_context.action_label
+                    self.interaction_context.clear()
+                    self.context.clear()
+
+                if confirmed_intent:
+                    logger.info("Session '%s': Confirmed high-risk operation %s", session_id, confirmed_intent.name)
+                    # Authoritative Policy override: user explicitly confirmed this turn
+                    policy = PolicyEvaluation(
+                        decision=DECISION_ALLOW,
+                        risk_level="high",
+                        action_label=action_label,
+                        reason="User explicitly confirmed operation.",
+                    )
+                    res = self._dispatch_capability(confirmed_intent)
+                    session_ctx.record_turn(confirmed_intent, res)
+                    resp_text = self.response_generator.generate(res, confirmed_intent, policy)
+                    self._sync_backwards_compat(session_ctx)
+                    return ProcessOutput(
+                        response_text=resp_text,
+                        intent=confirmed_intent,
+                        result=res,
+                        direction=direction,
+                        session_id=session_id,
+                    )
+            elif pack.is_cancellation(lowered) or lowered in ("no", "n", "نه", "خیر", "لغو", "کنسل"):
+                if pending_conf:
+                    self.context_manager.reject_pending_confirmation(session_id)
+                self.interaction_context.clear()
+                self.context.clear()
+                logger.info("Session '%s': Cancelled pending confirmation", session_id)
+                cancel_intent = Intent(
+                    name=INTENT_CANCEL,
+                    confidence=1.0,
+                    raw_text=cleaned_input,
+                    language=lang,
+                )
+                res = ExecutionResult(
+                    success=True,
+                    executed=False,
+                    status=STATUS_CANCELLED,
+                    intent_name=INTENT_CANCEL,
+                    message_key="action_cancelled",
+                    message="Action was cancelled.",
+                )
+                resp_text = self.response_generator.generate(res, cancel_intent)
+                self._sync_backwards_compat(session_ctx)
+                return ProcessOutput(
+                    response_text=resp_text,
+                    intent=cancel_intent,
+                    result=res,
+                    direction=direction,
+                    session_id=session_id,
+                )
+
+        # =====================================================================
+        # 3. Check for Backwards-Compatible InteractionContext Turn Evaluation
+        # =====================================================================
+        context_action, context_payload = self.interaction_context.evaluate_turn(cleaned_input)
+        if context_action == "CANCEL":
             cancel_intent = Intent(
                 name=INTENT_CANCEL,
                 confidence=1.0,
-                raw_text=user_input,
+                raw_text=cleaned_input,
                 language=self.interaction_context.language,
             )
             res = ExecutionResult(
@@ -116,36 +263,134 @@ class IntentRouter:
                 response_text=resp_text,
                 intent=cancel_intent,
                 result=res,
-                direction=pack.direction,
+                direction=direction,
+                session_id=session_id,
             )
         elif context_action == "SELECT":
             target_name, selected_item, entities = context_payload
-            pack = self.loader.get(self.interaction_context.language)
-            intent = Intent(
+            selected_intent = Intent(
                 name=target_name,
                 confidence=1.0,
                 entities=entities,
-                raw_text=user_input,
+                raw_text=cleaned_input,
                 normalized_text=str(selected_item),
                 language=self.interaction_context.language,
             )
+            res = self._dispatch_capability(selected_intent)
+            session_ctx.record_turn(selected_intent, res)
+            resp_text = self.response_generator.generate(res, selected_intent)
+            self.interaction_context.clear()
+            self._sync_backwards_compat(session_ctx)
+            return ProcessOutput(
+                response_text=resp_text,
+                intent=selected_intent,
+                result=res,
+                direction=direction,
+                session_id=session_id,
+            )
 
-        # 2. If not consumed by context, parse intent normally
-        if intent is None:
-            intent = self.parser.parse(user_input, context=self.context)
+        # =====================================================================
+        # 4. Check for Open State Declaration ("Chrome و Firefox باز هستند")
+        # =====================================================================
+        declared_apps = self.resolver._detect_open_state_declaration(cleaned_input.lower(), lang)
+        if declared_apps and not any(kw in cleaned_input.lower() for kw in ("ببند", "باز کن", "اجرا", "close", "open")):
+            session_ctx.open_applications = declared_apps
+            app_list_str = " و ".join(declared_apps) if lang == "fa" else ", ".join(declared_apps)
+            ack_text = (
+                f"متوجه شدم. برنامه‌های {app_list_str} در وضعیت باز ثبت شدند."
+                if lang == "fa"
+                else f"Understood. {app_list_str} recorded as currently open."
+            )
+            state_intent = Intent(
+                name="SHOW_SYSTEM_INFO",
+                confidence=1.0,
+                raw_text=cleaned_input,
+                language=lang,
+            )
+            res = ExecutionResult(
+                success=True,
+                executed=False,
+                status=STATUS_SUCCESS,
+                message=ack_text,
+            )
+            return ProcessOutput(
+                response_text=ack_text,
+                intent=state_intent,
+                result=res,
+                direction=direction,
+                session_id=session_id,
+            )
 
-        # Clear awaiting selection if consumed
-        if self.context.get("awaiting_selection") and intent.name != INTENT_UNKNOWN:
-            self.context.clear()
+        # =====================================================================
+        # 5. Build Command Plan (Single or Multi-Step)
+        # =====================================================================
+        plan = self.planner.build_plan(cleaned_input, context=session_ctx)
 
-        # Get direction from active language pack
-        pack: LanguagePack = self.loader.get(intent.language)
+        # Case 5A: Single-Step Plan
+        if plan.is_single_step:
+            step = plan.steps[0]
+            output = self._process_single_step(step, session_ctx, session_id, lang)
+            output.plan = plan
+            return output
+
+        # Case 5B: Multi-Step Plan ("Chrome رو باز کن و GitHub رو باز کن")
+        return self._process_multi_step_plan(plan, session_ctx, session_id, lang)
+
+    def _process_single_step(
+        self,
+        step: CommandStep,
+        session_ctx: SessionContext,
+        session_id: str,
+        lang: str,
+    ) -> ProcessOutput:
+        """Execute single intent step through resolver, policy, and capability."""
+        intent = step.intent
+        pack = self.loader.get(intent.language or lang)
         direction = pack.direction
 
-        # 3. Policy evaluation
+        # 1. Resolve Contextual Entities (pronouns, active app, active dir, ambiguity)
+        res_result = self.resolver.resolve(
+            raw_text=step.raw_text,
+            parsed_intent_name=intent.name,
+            extracted_entities=intent.entities,
+            context=session_ctx,
+            language=intent.language or lang,
+        )
+
+        # 1a. Ambiguity handling (e.g. "Chrome و Firefox باز هستند" -> "ببندش")
+        if res_result.is_ambiguous:
+            logger.info("Ambiguity detected for command: %s", step.raw_text)
+            ambiguity_intent = Intent(
+                name=INTENT_CLARIFY_AMBIGUITY,
+                confidence=1.0,
+                raw_text=step.raw_text,
+                language=intent.language,
+                is_clarification_needed=True,
+                clarification_prompt=res_result.clarification_prompt,
+            )
+            res = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_NEEDS_CLARIFICATION,
+                intent_name=INTENT_CLARIFY_AMBIGUITY,
+                message=res_result.clarification_prompt,
+            )
+            return ProcessOutput(
+                response_text=res_result.clarification_prompt,
+                intent=ambiguity_intent,
+                result=res,
+                direction=direction,
+                session_id=session_id,
+            )
+
+        if res_result.resolved and res_result.entities:
+            intent.entities.update(res_result.entities)
+            step.entities.update(res_result.entities)
+
+        # 2. Policy Evaluation
         policy: PolicyEvaluation = self.policy_engine.evaluate(intent)
 
-        # 3a. Dangerous or Denied by policy
+        # 2a. Dangerous or Denied by Security Policy
         if intent.is_dangerous or policy.is_denied:
             res = ExecutionResult(
                 success=False,
@@ -156,47 +401,64 @@ class IntentRouter:
                 error="Action blocked for security reasons.",
                 message="Action blocked for security reasons.",
             )
-            response_text = self.response_generator.generate(res, intent, policy)
+            resp_text = self.response_generator.generate(res, intent, policy)
+            step.status = "BLOCKED"
+            step.result = res
             return ProcessOutput(
-                response_text=response_text,
+                response_text=resp_text,
                 intent=intent,
                 result=res,
                 direction=direction,
+                session_id=session_id,
             )
 
-        # If user explicitly confirmed this high-risk intent in this turn, allow execution
-        if is_user_confirmed and policy.requires_confirmation:
-            policy = PolicyEvaluation(
-                decision=DECISION_ALLOW,
-                risk_level=policy.risk_level,
-                action_label=policy.action_label,
-                reason="User explicitly confirmed operation.",
-            )
-
-        # 3b. Confirmation required by policy
+        # 2b. High-Risk Action Requiring User Confirmation
         if policy.requires_confirmation:
+            conf_token = self.context_manager.set_pending_confirmation(
+                session_id=session_id,
+                intent=intent,
+                action_label=policy.action_label,
+            )
+            self.context["awaiting_confirmation"] = True
             self.interaction_context.set_pending_confirmation(
                 intent=intent, action_label=policy.action_label, language=intent.language
             )
-            self.context["awaiting_confirmation"] = True
+
+            # Localized confirmation message formatting
+            if intent.name == "DELETE_FILE" and intent.entities.get("file"):
+                conf_msg = pack.get_response(
+                    "confirm_delete_file",
+                    default=f"Are you sure you want to delete {intent.entities['file']}? (yes / no)",
+                    file_name=intent.entities["file"],
+                )
+            else:
+                conf_msg = pack.get_response(
+                    "confirm_action",
+                    default="Are you sure you want to {action}? (yes / no)",
+                    action=policy.action_label or intent.name,
+                )
+
             res = ExecutionResult(
                 success=True,
                 executed=False,
-                status=STATUS_SUCCESS,
+                status=STATUS_NEEDS_CONFIRMATION,
                 intent_name=intent.name,
                 message_key="confirm_action",
                 params={"action": policy.action_label or intent.name},
-                message=f"Confirmation required for {intent.name}",
+                message=conf_msg,
+                metadata={"confirmation_id": conf_token.confirmation_id},
             )
-            response_text = self.response_generator.generate(res, intent, policy)
+            step.status = "PENDING"
+            step.result = res
             return ProcessOutput(
-                response_text=response_text,
+                response_text=conf_msg,
                 intent=intent,
                 result=res,
                 direction=direction,
+                session_id=session_id,
             )
 
-        # 4. Clarification needed
+        # 2c. Clarification Needed
         if intent.is_clarification_needed:
             res = ExecutionResult(
                 success=False,
@@ -206,15 +468,18 @@ class IntentRouter:
                 message_key="clarify_general",
                 message=intent.clarification_prompt or "Clarification required.",
             )
-            response_text = self.response_generator.generate(res, intent)
+            resp_text = self.response_generator.generate(res, intent)
+            step.status = "FAILED"
+            step.result = res
             return ProcessOutput(
-                response_text=response_text,
+                response_text=resp_text,
                 intent=intent,
                 result=res,
                 direction=direction,
+                session_id=session_id,
             )
 
-        # 5. Unknown intent
+        # 2d. Unknown Intent
         if intent.name == INTENT_UNKNOWN:
             res = ExecutionResult(
                 success=False,
@@ -224,18 +489,23 @@ class IntentRouter:
                 message_key="unknown_intent",
                 message="Unknown command.",
             )
-            response_text = self.response_generator.generate(res, intent)
+            resp_text = self.response_generator.generate(res, intent)
+            step.status = "FAILED"
+            step.result = res
             return ProcessOutput(
-                response_text=response_text,
+                response_text=resp_text,
                 intent=intent,
                 result=res,
                 direction=direction,
+                session_id=session_id,
             )
 
-        # 6. Route to desktop capability
+        # 3. Route to Capability
         result = self._dispatch_capability(intent)
+        step.result = result
+        step.status = "SUCCESS" if result.success else "FAILED"
 
-        # 7. Update context if executor requested follow-up / disambiguation
+        # 4. Context Follow-up or Disambiguation
         if result.requires_context:
             self.context = dict(result.context_data)
             self.interaction_context.set_pending_selection(
@@ -248,17 +518,148 @@ class IntentRouter:
             self.context.clear()
             self.interaction_context.clear()
 
-        # 8. Natural response generation
-        response_text = self.response_generator.generate(result, intent, policy)
+        # Update Session Context turn state
+        session_ctx.record_turn(intent, result)
+        self._sync_backwards_compat(session_ctx)
+
+        # 5. Natural Localized Response
+        resp_text = self.response_generator.generate(result, intent, policy)
         is_exit = intent.name == INTENT_EXIT_APPLICATION
 
         return ProcessOutput(
-            response_text=response_text,
+            response_text=resp_text,
             intent=intent,
             result=result,
             is_exit=is_exit,
             direction=direction,
+            session_id=session_id,
         )
+
+    def _process_multi_step_plan(
+        self,
+        plan: CommandPlan,
+        session_ctx: SessionContext,
+        session_id: str,
+        lang: str,
+    ) -> ProcessOutput:
+        """
+        Execute multi-step plan sequentially with strict step failure isolation.
+        """
+        pack = self.loader.get(lang)
+        direction = pack.direction
+        step_responses: list[str] = []
+        any_failed = False
+        any_success = False
+
+        for i, step in enumerate(plan.steps):
+            intent = step.intent
+
+            # Resolve Contextual Entities per step
+            res_result = self.resolver.resolve(
+                raw_text=step.raw_text,
+                parsed_intent_name=intent.name,
+                extracted_entities=intent.entities,
+                context=session_ctx,
+                language=intent.language or lang,
+            )
+            if res_result.resolved and res_result.entities:
+                intent.entities.update(res_result.entities)
+                step.entities.update(res_result.entities)
+
+            # Policy Check
+            policy: PolicyEvaluation = self.policy_engine.evaluate(intent)
+            if intent.is_dangerous or policy.is_denied:
+                step.status = "BLOCKED"
+                step.result = ExecutionResult(
+                    success=False,
+                    executed=False,
+                    status=STATUS_PERMISSION_DENIED,
+                    intent_name=intent.name,
+                    message="Blocked by security policy.",
+                )
+                step_responses.append(f"✕ {intent.name}: Action blocked for security reasons.")
+                any_failed = True
+                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                break
+
+            if policy.requires_confirmation:
+                # Multi-step command paused for confirmation
+                self.context_manager.set_pending_confirmation(
+                    session_id=session_id,
+                    intent=intent,
+                    action_label=policy.action_label,
+                )
+                step.status = "PENDING"
+                conf_msg = pack.get_response(
+                    "confirm_action",
+                    default="Are you sure you want to {action}? (yes / no)",
+                    action=policy.action_label or intent.name,
+                )
+                step_responses.append(f"⚠️ {conf_msg}")
+                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                break
+
+            # Execute Capability
+            step_res = self._dispatch_capability(intent)
+            step.result = step_res
+
+            if step_res.success:
+                step.status = "SUCCESS"
+                any_success = True
+                session_ctx.record_turn(intent, step_res)
+                msg = self.response_generator.generate(step_res, intent, policy)
+                step_responses.append(msg)
+            else:
+                step.status = "FAILED"
+                step.error = step_res.error or step_res.message
+                any_failed = True
+                msg = self.response_generator.generate(step_res, intent, policy)
+                step_responses.append(msg)
+                # Failure isolation: Do not execute subsequent dependent steps!
+                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                break
+
+        # Determine overall plan status
+        if any_success and not any_failed:
+            plan.status = "SUCCESS"
+            overall_status = STATUS_SUCCESS
+        elif any_success and any_failed:
+            plan.status = "PARTIAL_SUCCESS"
+            overall_status = STATUS_PARTIAL_SUCCESS
+        else:
+            plan.status = "FAILED"
+            overall_status = STATUS_FAILED
+
+        joined_response = "\n".join(step_responses)
+        combined_result = ExecutionResult(
+            success=any_success,
+            executed=any_success,
+            status=overall_status,
+            intent_name="MULTI_STEP_PLAN",
+            message=joined_response,
+            data={"steps_count": len(plan.steps), "plan_status": plan.status},
+        )
+
+        return ProcessOutput(
+            response_text=joined_response,
+            intent=plan.steps[0].intent,
+            result=combined_result,
+            direction=direction,
+            plan=plan,
+            session_id=session_id,
+        )
+
+    def _mark_remaining_steps(self, steps: list[CommandStep], status: str) -> None:
+        """Mark subsequent unexecuted steps as SKIPPED or CANCELLED."""
+        for step in steps:
+            step.status = status
+            step.result = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_FAILED,
+                intent_name=step.intent.name,
+                message=f"Step was not executed because a prior step {status.lower()}.",
+            )
 
     def _dispatch_capability(self, intent: Intent) -> ExecutionResult:
         """Route intent to matched Capability provider."""
@@ -287,6 +688,12 @@ class IntentRouter:
             message_key="unknown_intent",
             params={},
         )
+
+    def _sync_backwards_compat(self, session_ctx: SessionContext) -> None:
+        """Keep v0.1.1 legacy context dictionaries in sync for backwards compatibility."""
+        self.context["active_application"] = session_ctx.active_application
+        self.context["active_directory"] = session_ctx.active_directory
+        self.context["active_file"] = session_ctx.active_file
 
     def reset_context(self) -> None:
         """Clear active conversation context."""

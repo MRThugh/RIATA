@@ -1,8 +1,8 @@
 """
-Base Capability abstraction for R.I.A.T.A v0.1.1
+Base Capability abstraction for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 
-Defines the contract for modular desktop capabilities.
+Defines standardized contract and self-describing metadata for desktop capabilities.
 """
 
 from abc import ABC, abstractmethod
@@ -37,7 +37,29 @@ class BaseCapability(ABC):
         """Return True if this capability can process the given intent."""
         return intent.name in self.supported_intents
 
+    def describe(self, intent: Intent) -> str:
+        """Provide human-readable description of what this capability will do."""
+        return f"{self.name}: {intent.name}"
+
+    def validate(self, intent: Intent) -> tuple[bool, Optional[str]]:
+        """
+        Validate intent entities and prerequisites before execution.
+        Returns (is_valid, error_message).
+        """
+        if not self.can_handle(intent):
+            return False, f"Capability '{self.id}' does not support intent '{intent.name}'."
+        return True, None
+
     @abstractmethod
     def execute(self, intent: Intent) -> ExecutionResult:
         """Safely execute the intent action and return an ExecutionResult."""
         pass
+
+    def metadata(self) -> dict[str, Any]:
+        """Return self-describing metadata for discovery and introspection."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "supported_intents": list(self.supported_intents),
+            "description": (self.__doc__ or self.name).strip(),
+        }

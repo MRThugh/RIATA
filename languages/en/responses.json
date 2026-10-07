@@ -32,6 +32,13 @@
   "confirm_action": "Are you sure you want to {action}? (yes / no)",
   "action_cancelled": "Action was cancelled.",
   "action_confirmed": "Action confirmed.",
-  "action_denied": "⚠️ This action is denied due to security restrictions.",
-  "already_running": "{app_name} is already running."
+  "already_running": "{app_name} is already running.",
+  "app_closed": "✓ {app_name} was closed.",
+  "app_close_failed": "✕ Failed to close {app_name}.",
+  "file_created": "✓ File {file_name} created.",
+  "file_deleted": "✓ File {file_name} deleted.",
+  "url_opened": "✓ Opened {url}.",
+  "context_reset": "Conversation context was reset.",
+  "confirm_delete_file": "Are you sure you want to delete {file_name}? (yes / no)",
+  "clarify_ambiguity": "Which application should I close? {candidates}?"
 }

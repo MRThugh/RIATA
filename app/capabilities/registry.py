@@ -1,8 +1,8 @@
 """
-Capability Registry for R.I.A.T.A v0.1.1
+Capability Registry for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 
-Central coordinator for modular desktop capabilities.
+Central discovery and dispatch coordinator for modular desktop capabilities.
 """
 
 from typing import Optional
@@ -45,15 +45,30 @@ class CapabilityRegistry:
             self.register(cap)
 
     def register(self, capability: BaseCapability) -> None:
-        """Register a new capability."""
+        """Register a capability provider."""
         self._capabilities[capability.id] = capability
         for intent_name in capability.supported_intents:
             self._intent_to_capability[intent_name] = capability
         logger.debug("Registered capability '%s' handling %s", capability.id, capability.supported_intents)
 
+    def unregister(self, capability_id: str) -> bool:
+        """Unregister a capability provider and its mapped intents."""
+        if capability_id not in self._capabilities:
+            return False
+        cap = self._capabilities.pop(capability_id)
+        for intent_name in cap.supported_intents:
+            if self._intent_to_capability.get(intent_name) == cap:
+                del self._intent_to_capability[intent_name]
+        logger.debug("Unregistered capability '%s'", capability_id)
+        return True
+
     def find_for_intent(self, intent_name: str) -> Optional[BaseCapability]:
         """Find the capability capable of handling the specified intent."""
         return self._intent_to_capability.get(intent_name)
+
+    def supports_intent(self, intent_name: str) -> bool:
+        """Check if any registered capability handles the specified intent."""
+        return intent_name in self._intent_to_capability
 
     def get_capability(self, capability_id: str) -> Optional[BaseCapability]:
         """Retrieve capability by id."""

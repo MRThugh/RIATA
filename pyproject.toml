@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "riata"
-version = "0.1.1"
-description = "Deterministic, extensible, rule-based Linux desktop Intent Assistant supporting Persian and English."
+version = "0.2.0"
+description = "Deterministic, extensible, rule-based Linux desktop Intent Assistant supporting Persian and English with multi-step planning and contextual memory."
 readme = "README.md"
 authors = [
   { name = "Ali Kamrani", email = "kamrani.exe@gmail.com" }

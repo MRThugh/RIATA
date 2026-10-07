@@ -56,6 +56,40 @@
       ],
       "keywords": ["play", "music", "song"]
     },
+    "RESET_CONTEXT": {
+      "patterns": [
+        "^(forget\\s+it|reset\\s+context|start\\s+over|clear\\s+context)$"
+      ],
+      "keywords": ["forget it", "reset context", "start over"]
+    },
+    "CLOSE_APPLICATION": {
+      "patterns": [
+        "^(close|quit|exit|terminate)\\s+(app|application\\s+)?(.+)$",
+        "^close\\s+it$",
+        "^close$"
+      ],
+      "keywords": ["close", "quit", "terminate"]
+    },
+    "CREATE_FILE": {
+      "patterns": [
+        "^(?:create|make|touch)\\s+(?:file\\s+)?(.+?)(?:\\s+(?:in|inside)\\s+it)?$",
+        "^(?:create|make|touch)\\s+(.+?)\\s+in\\s+(.+)$"
+      ],
+      "keywords": ["create", "make", "touch"]
+    },
+    "DELETE_FILE": {
+      "patterns": [
+        "^(?:delete|remove|rm)\\s+(?:file\\s+)?(.+)$",
+        "^(?:delete|remove)\\s+it$"
+      ],
+      "keywords": ["delete", "remove"]
+    },
+    "OPEN_FILE": {
+      "patterns": [
+        "^open\\s+file\\s+(.+)$"
+      ],
+      "keywords": ["open file"]
+    },
     "OPEN_FOLDER": {
       "patterns": [
         "^(open|show|explore)\\s+(?:my\\s+)?folder\\s+(.+)$",
@@ -63,6 +97,13 @@
         "^folder\\s+(.+)$"
       ],
       "keywords": ["folder"]
+    },
+    "OPEN_URL": {
+      "patterns": [
+        "^(?:open|launch)\\s+(?:url|website|site|link)\\s+(.+)$",
+        "^(?:open|launch)\\s+(https?://\\S+)$"
+      ],
+      "keywords": ["open url", "website"]
     },
     "OPEN_APPLICATION": {
       "patterns": [
