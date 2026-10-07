@@ -1,5 +1,5 @@
 """
-Files and folder executor for R.I.A.T.A v0.1.0
+Files and folder executor for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 Security Hardening: Strict filesystem sandbox containment and symlink escape prevention.
 """
@@ -26,8 +26,19 @@ from app.executor.result import (
 
 logger = get_logger("riata.executor.files")
 
-# Sensitive hidden folders within user home that must never be opened via generic commands
-SENSITIVE_HOME_PARTS = {".ssh", ".gnupg", ".pki"}
+# Sensitive hidden folders and credential stores within user home that must never be opened
+SENSITIVE_HOME_PARTS = {
+    ".ssh",
+    ".gnupg",
+    ".pki",
+    ".aws",
+    ".docker",
+    ".kube",
+    ".password-store",
+    ".netrc",
+    ".bash_history",
+    ".zsh_history",
+}
 
 
 def is_allowed_path(

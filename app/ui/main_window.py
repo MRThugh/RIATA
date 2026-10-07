@@ -51,6 +51,23 @@ class ExecutionWorker(QObject):
             self.finished.emit(output)
         except Exception as e:
             logger.exception("Error in execution worker: %s", e)
+            from app.engine.intent import Intent
+            from app.executor.result import STATUS_EXECUTION_ERROR, ExecutionResult
+            fallback_intent = Intent.unknown(self.user_text)
+            fallback_res = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_EXECUTION_ERROR,
+                error=str(e),
+                message="An internal error occurred during execution.",
+            )
+            fallback_output = ProcessOutput(
+                response_text=f"An unexpected error occurred: {e}",
+                intent=fallback_intent,
+                result=fallback_res,
+                direction="ltr",
+            )
+            self.finished.emit(fallback_output)
 
 
 class MainWindow(QMainWindow):

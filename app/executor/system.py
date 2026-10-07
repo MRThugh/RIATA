@@ -1,5 +1,5 @@
 """
-System intents executor for R.I.A.T.A v0.1.0
+System intents executor for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 Security Hardening: Honest execution reporting and robust exception handling.
 """

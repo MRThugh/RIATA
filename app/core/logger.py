@@ -1,5 +1,5 @@
 """
-Structured logging system for R.I.A.T.A v0.1.0
+Structured logging system for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 """
 

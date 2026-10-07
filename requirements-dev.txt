@@ -1,0 +1,6 @@
+# R.I.A.T.A v0.1.1 Development & Test Dependencies
+# Responsive Intent Automation & Task Assistant
+# Author: Ali Kamrani (MRThugh)
+
+-r requirements.txt
+pytest>=7.0.0

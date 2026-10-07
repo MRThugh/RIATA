@@ -244,8 +244,9 @@ class LanguageRegistry:
                         rules_inst = mod.get_rules()
                     elif hasattr(mod, "rules"):
                         rules_inst = mod.rules
-            except Exception as e:
+            except BaseException as e:
                 logger.warning("Error loading rules.py from %s: %s", pack_dir, e)
+                rules_inst = None
 
         return LanguagePack(
             code=code,

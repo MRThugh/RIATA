@@ -12,8 +12,14 @@ Verifies:
 
 import sys
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+
+# Ensure PySide6 and Qt platform runtime are available before importing widgets
+pytest.importorskip("PySide6")
+try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+except Exception as err:
+    pytest.skip(f"PySide6 Qt platform runtime not available: {err}", allow_module_level=True)
 
 from app.ui.chat.chat_view import ChatView
 from app.ui.input.message_input import MessageInputWidget

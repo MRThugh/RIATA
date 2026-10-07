@@ -79,6 +79,18 @@ def test_open_file_security_statuses():
     assert res_empty.executed is False
     assert res_empty.status == STATUS_INVALID_COMMAND
 
+    # 4. Sensitive credential file
+    intent_sensitive = Intent(
+        name="OPEN_FILE",
+        confidence=0.95,
+        entities={"file": "~/.ssh/id_rsa"},
+    )
+    res_sensitive = execute_open_file(intent_sensitive)
+    assert res_sensitive.success is False
+    assert res_sensitive.executed is False
+    assert res_sensitive.status == STATUS_PATH_NOT_ALLOWED
+
+
 
 def test_dangerous_intent_status_in_router(router):
     """Verify router returns STATUS_PERMISSION_DENIED with executed=False on dangerous input."""

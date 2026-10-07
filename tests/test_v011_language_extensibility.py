@@ -140,3 +140,32 @@ def test_hypothetical_third_language_without_core_modification():
     # 5. Conversational confirmation check
     assert german_pack.is_confirmation("ja") is True
     assert german_pack.is_cancellation("nein") is True
+
+
+def test_language_pack_with_faulty_rules_does_not_crash(tmp_path):
+    """Verify that a language pack with broken/syntax-error rules.py loads gracefully without crashing."""
+    import json
+    from pathlib import Path
+    pack_dir = tmp_path / "broken_lang"
+    pack_dir.mkdir()
+
+    manifest = {
+        "code": "br",
+        "name": "Broken",
+        "english_name": "Broken",
+        "direction": "ltr",
+        "version": "0.1.1",
+    }
+    with open(pack_dir / "manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f)
+
+    # Write a rules.py file with a syntax error
+    with open(pack_dir / "rules.py", "w", encoding="utf-8") as f:
+        f.write("def broken_syntax(:\n   invalid python code\n")
+
+    registry = LanguageRegistry(languages_dir=tmp_path)
+    # The broken pack should load its manifest without crashing the registry
+    pack = registry.get("br")
+    assert pack.code == "br"
+    assert pack.rules is None
+

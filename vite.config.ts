@@ -2,23 +2,93 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { spawn } from "child_process";
+import { IncomingMessage } from "http";
 
-// Local loopback allowed origins and hosts
-const ALLOWED_LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "127.0.0.1:3000", "localhost:3000"]);
+// Authorized client identifier token
+const RIATA_CLIENT_TOKEN = "web-v0.1.1";
 
-function isLocalOrigin(originHeader?: string, hostHeader?: string): boolean {
-  if (hostHeader && ALLOWED_LOCAL_HOSTS.has(hostHeader.toLowerCase())) {
-    // Standard local request
+// Allowed loopback hostnames
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+interface SecurityCheckResult {
+  allowed: boolean;
+  statusCode: number;
+  message: string;
+  matchedOrigin?: string;
+}
+
+function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
+  const hostHeader = (req.headers["host"] || "").split(":")[0].toLowerCase();
+  const originHeader = (req.headers["origin"] as string) || "";
+  const secFetchSite = (req.headers["sec-fetch-site"] as string) || "";
+  const clientToken = (req.headers["x-riata-client"] as string) || "";
+
+  // 1. Block any explicit cross-site request immediately
+  if (secFetchSite === "cross-site") {
+    return {
+      allowed: false,
+      statusCode: 403,
+      message: "Forbidden: Cross-site request blocked by browser security boundary.",
+    };
   }
-  if (!originHeader) {
-    return true; // Direct same-origin or non-browser local request
+
+  // 2. Validate Host header
+  if (!hostHeader) {
+    return {
+      allowed: false,
+      statusCode: 400,
+      message: "Bad Request: Missing Host header.",
+    };
   }
-  try {
-    const parsed = new URL(originHeader);
-    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-  } catch {
-    return false;
+
+  // 3. Validate Origin when present
+  if (originHeader) {
+    try {
+      const parsedOrigin = new URL(originHeader);
+      const originHost = parsedOrigin.hostname.toLowerCase();
+      const isLoopback = LOOPBACK_HOSTNAMES.has(originHost);
+      const matchesHost = originHost === hostHeader;
+
+      if (!isLoopback && !matchesHost) {
+        return {
+          allowed: false,
+          statusCode: 403,
+          message: `Forbidden: Origin '${parsedOrigin.origin}' is not authorized.`,
+        };
+      }
+    } catch {
+      return {
+        allowed: false,
+        statusCode: 400,
+        message: "Bad Request: Malformed Origin header.",
+      };
+    }
+  } else {
+    // CRITICAL: Never trust origin-less requests automatically without anti-CSRF token verification
+    if (clientToken !== RIATA_CLIENT_TOKEN) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        message: "Forbidden: Missing anti-CSRF authentication header 'X-RIATA-Client'.",
+      };
+    }
   }
+
+  // 4. Require X-RIATA-Client token for all API endpoints
+  if (clientToken !== RIATA_CLIENT_TOKEN) {
+    return {
+      allowed: false,
+      statusCode: 403,
+      message: `Forbidden: Invalid or missing 'X-RIATA-Client' header token.`,
+    };
+  }
+
+  return {
+    allowed: true,
+    statusCode: 200,
+    message: "Authorized",
+    matchedOrigin: originHeader || undefined,
+  };
 }
 
 export default defineConfig({
@@ -29,15 +99,13 @@ export default defineConfig({
       name: "riata-python-api-bridge",
       configureServer(server) {
         server.middlewares.use("/api/command", (req, res) => {
-          // 1. Origin / Host access validation
-          const hostHeader = req.headers["host"] || "";
-          const originHeader = (req.headers["origin"] as string) || "";
+          // 1. Strict Request Security & Origin / CSRF Validation
+          const security = validateRequestSecurity(req);
 
-          // Set restricted CORS header to local origin if valid, never '*'
-          if (originHeader && isLocalOrigin(originHeader, hostHeader)) {
-            res.setHeader("Access-Control-Allow-Origin", originHeader);
+          if (security.matchedOrigin) {
+            res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
             res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
           }
 
           if (req.method === "OPTIONS") {
@@ -60,15 +128,14 @@ export default defineConfig({
             return;
           }
 
-          // Origin check
-          if (!isLocalOrigin(originHeader, hostHeader)) {
-            res.statusCode = 403;
+          if (!security.allowed) {
+            res.statusCode = security.statusCode;
             res.setHeader("Content-Type", "application/json");
             res.end(
               JSON.stringify({
                 success: false,
                 status: "PERMISSION_DENIED",
-                message: "Forbidden: API is restricted to local loopback.",
+                message: security.message,
                 executed: false,
               })
             );
@@ -105,7 +172,7 @@ export default defineConfig({
             let parsedBody: any;
             try {
               parsedBody = JSON.parse(body || "{}");
-            } catch (err) {
+            } catch {
               res.statusCode = 400;
               res.setHeader("Content-Type", "application/json");
               res.end(
@@ -150,7 +217,7 @@ export default defineConfig({
               return;
             }
 
-            // 4. Safe Python execution passing data over stdin JSON
+            // 4. Safe Python execution passing data over stdin JSON with execution timeout
             const pyScript = `
 import json, sys
 from app.engine.router import get_intent_router
@@ -208,6 +275,12 @@ except Exception as e:
 
             let stdout = "";
             let stderr = "";
+            let isTimedOut = false;
+
+            const timer = setTimeout(() => {
+              isTimedOut = true;
+              pyProc.kill("SIGKILL");
+            }, 15000);
 
             pyProc.stdout.on("data", (data) => {
               stdout += data.toString();
@@ -218,7 +291,22 @@ except Exception as e:
             });
 
             pyProc.on("close", (code) => {
+              clearTimeout(timer);
               res.setHeader("Content-Type", "application/json");
+
+              if (isTimedOut) {
+                res.statusCode = 504;
+                res.end(
+                  JSON.stringify({
+                    success: false,
+                    executed: false,
+                    status: "TIMEOUT",
+                    message: "Intent processing timed out after 15 seconds.",
+                  })
+                );
+                return;
+              }
+
               if (stdout.includes("---RIATA_JSON_START---")) {
                 const jsonStr = stdout
                   .split("---RIATA_JSON_START---")[1]
@@ -246,18 +334,25 @@ except Exception as e:
         });
 
         server.middlewares.use("/api/run-tests", (req, res) => {
-          const originHeader = (req.headers["origin"] as string) || "";
-          const hostHeader = req.headers["host"] || "";
+          const security = validateRequestSecurity(req);
 
-          if (!isLocalOrigin(originHeader, hostHeader)) {
-            res.statusCode = 403;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Forbidden: Local access only." }));
+          if (security.matchedOrigin) {
+            res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
+            res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
+          }
+
+          if (req.method === "OPTIONS") {
+            res.statusCode = 204;
+            res.end();
             return;
           }
 
-          if (originHeader) {
-            res.setHeader("Access-Control-Allow-Origin", originHeader);
+          if (!security.allowed) {
+            res.statusCode = security.statusCode;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: security.message }));
+            return;
           }
 
           const pytestProc = spawn("pytest", ["-v"], {
@@ -288,7 +383,6 @@ except Exception as e:
   ],
   server: {
     port: 3000,
-    // Bound strictly to local loopback by default to prevent unauthorized network access
-    host: process.env.RIATA_HOST || "127.0.0.1",
+    host: "0.0.0.0",
   },
 });

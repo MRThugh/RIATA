@@ -1,5 +1,5 @@
 """
-Application executor for R.I.A.T.A v0.1.0
+Application executor for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 Security Hardening: Honest execution reporting, strict allowlist enforcement, and zero shell invocation.
 """

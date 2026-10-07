@@ -1,5 +1,5 @@
 # R.I.A.T.A — Architecture Overview
-**Responsive Intent Automation & Task Assistant (v0.1.0)**  
+**Responsive Intent Automation & Task Assistant (v0.1.1)**  
 **Author:** Ali Kamrani (MRThugh)  
 **License:** MIT  
 **Platform:** Ubuntu Linux  
@@ -8,47 +8,41 @@
 
 ## 1. Architectural Philosophy
 
-R.I.A.T.A is built upon a strict **Separation of Concerns**:
+R.I.A.T.A v0.1.1 is built upon a strict **Unidirectional Processing Pipeline** with clear separation of concerns:
 
-```
-[ User Input (Natural Language) ]
-               │
-               ▼
-   [ Language Detection ] ────────► (fa / en)
-               │
-               ▼
-    [ Language Normalizer ] ───────► (Normalizes character variants, whitespace, polite particles)
-               │
-               ▼
-     [ Intent Matcher ] ──────────► (Deterministic rule-based pattern matching)
-               │
-               ▼
-    [ Entity Extractor ] ─────────► (Isolates application, folder, song entities)
-               │
-               ▼
-     [ Intent Object ] ───────────► (Language-independent: Intent name + Entity dictionary)
-               │
-               ▼
-     [ Intent Router ] ───────────► (Routes to specialized executor modules)
-               │
-               ▼
-    [ Controlled Action ] ────────► (subprocess.Popen with registered binaries — NO shell=True)
-               │
-               ▼
-   [ Execution Result ] ──────────► (Status code, message key, parameters)
-               │
-               ▼
-  [ Response Generator ] ─────────► (Translates result to user language pack)
-               │
-               ▼
-   [ Visual Presentation ] ───────► (Modern PySide6 chat UI with RTL/LTR support)
+```text
+User Input (Natural Language: Persian or English)
+       │
+       ▼
+Language System (Registry & Language Packs)
+       │
+       ▼
+Intent Engine (Parser, Matcher, Entity Extractor)
+       │
+       ▼
+Interaction System (Context, Disambiguation, Confirmation)
+       │
+       ▼
+Policy Engine (Risk Evaluation: ALLOW, CONFIRM, DENY)
+       │
+       ▼
+Capability Registry (Applications, Filesystem, Media, System)
+       │
+       ▼
+Desktop Capability Provider
+       │
+       ▼
+Safe Executor (Direct process invocation — zero shell=True)
+       │
+       ▼
+Operating System (Ubuntu Linux Desktop)
 ```
 
 ### Core Invariants:
 1. **Language Independence:** An Intent like `OPEN_APPLICATION` with entity `{"application": "firefox"}` is identical whether entered in Persian (`فایرفاکس رو باز کن`) or English (`Open Firefox`).
-2. **Safe Execution:** Arbitrary user strings are **never** evaluated by a shell (`os.system` and `shell=True` are banned). Execution occurs only via validated executables identified through the Application Registry or standard desktop utilities.
-3. **Destructive Protection:** Dangerous actions (`sudo`, `rm`, `mkfs`, `shutdown`, `reboot`, etc.) are recognized and rejected before reaching execution.
-4. **Offline & AI-Free:** Version 0.1 operates deterministically without machine learning models, external internet APIs, or cloud NLP services.
+2. **Safe Execution:** Arbitrary user strings are **never** evaluated by a shell (`os.system` and `shell=True` are strictly banned). Execution occurs only via validated executables identified through the Application Registry or standard desktop utilities.
+3. **Policy-First Security:** High-risk actions (`SHUTDOWN`, `DELETE_FILE`, `RESTART`) require explicit user confirmation (`CONFIRM`). Malicious commands (`rm`, `sudo`, `mkfs`, fork bombs) are unconditionally rejected (`DENY`).
+4. **Offline & Deterministic:** Version 0.1.1 operates deterministically without cloud NLP services or machine learning models.
 
 ---
 
@@ -58,61 +52,79 @@ R.I.A.T.A is built upon a strict **Separation of Concerns**:
 RIATA/
 ├── app/
 │   ├── __init__.py
-│   ├── core/
-│   │   ├── config.py             # Configuration and environment loaders
-│   │   ├── constants.py          # Intent names, thresholds, banned commands
-│   │   └── logger.py             # Structured logging with memory broadcast
-│   ├── engine/
-│   │   ├── intent.py             # Dataclass representation of parsed intent
-│   │   ├── matcher.py            # Rule-based intent parser and disambiguation
-│   │   ├── normalizer.py         # Multi-language normalization engine
-│   │   ├── entity_extractor.py   # Extracts application, folder, audio entities
-│   │   └── router.py             # Orchestrates parsing, dispatch, and context
-│   ├── languages/
-│   │   ├── detector.py           # Local Unicode-based script detector
-│   │   └── loader.py             # Dynamic language pack discovery
-│   ├── executor/
-│   │   ├── application.py        # Safe execution of desktop apps
-│   │   ├── files.py              # XDG folder and safe user file opener
-│   │   ├── music.py              # ~/Music recursive scanner & player
-│   │   ├── system.py             # Terminal, settings, file manager, sys info
-│   │   ├── response_generator.py # Localized response translation
-│   │   └── result.py             # ExecutionResult dataclass
-│   ├── registry/
-│   │   └── applications.py       # Application aliases, .desktop scanner, which
-│   └── ui/
-│       ├── main_window.py        # PySide6 main window with QThread execution
-│       ├── chat_widget.py        # Scrollable timeline container
-│       ├── message_widget.py     # User and Assistant bubbles with RTL/LTR
-│       ├── input_widget.py       # Text editor with Enter/Shift+Enter
-│       └── styles.py             # Futuristic dark stylesheet
-├── languages/
-│   ├── fa/                       # Persian language pack
-│   └── en/                       # English language pack
-├── tests/                        # Full automated test suite (pytest)
-├── docs/                         # Architecture, intents, and language guides
-├── main.py                       # CLI / GUI desktop entrypoint
-└── requirements.txt
+│   ├── core/                  # Configuration, constants, structured logging
+│   │   ├── config.py          # Configuration and environment loaders
+│   │   ├── constants.py       # Intent names, thresholds, banned commands
+│   │   └── logger.py          # Structured logging with memory ring-buffer
+│   ├── engine/                # Rule-based Intent Engine
+│   │   ├── intent.py          # Language-independent Intent data model
+│   │   ├── matcher.py         # Pattern matching & confidence scoring
+│   │   ├── normalizer.py      # Multi-language normalization engine
+│   │   ├── entity_extractor.py# Extracts apps, folders, song names
+│   │   ├── router.py          # Orchestrates parsing, policy, capability dispatch
+│   │   └── task.py            # Async execution and task tracking
+│   ├── languages/             # Extensible language pack registry
+│   │   ├── registry.py        # Central pack discovery and registry
+│   │   ├── rules.py           # Base language rule interfaces
+│   │   ├── detector.py        # Unicode script range detector
+│   │   └── loader.py          # Backward-compatibility loader facade
+│   ├── interaction/           # Conversational state & responses
+│   │   ├── context.py         # Short-lived turn memory & disambiguation
+│   │   └── responses.py       # Localized natural feedback generator
+│   ├── policy/                # Risk-aware desktop security engine
+│   │   ├── engine.py          # Evaluates ALLOW, CONFIRM, and DENY
+│   │   └── decision.py        # Policy evaluation decision models
+│   ├── capabilities/          # Modular desktop capabilities
+│   │   ├── base.py            # Base capability contract
+│   │   ├── registry.py        # Central capability dispatcher
+│   │   ├── applications.py    # Desktop app launcher
+│   │   ├── filesystem.py      # Folder and file navigation
+│   │   ├── media.py           # Local audio scanner and playback
+│   │   ├── system.py          # Terminal, settings, sysinfo, screenshot
+│   │   ├── processes.py       # Process capability foundation (stub)
+│   │   ├── windows.py         # Window management foundation (stub)
+│   │   ├── notifications.py   # Desktop notifications foundation (stub)
+│   │   └── clipboard.py       # Clipboard foundation (stub)
+│   ├── executor/              # Safe Linux action executors
+│   │   ├── application.py     # Subprocess launcher for applications
+│   │   ├── files.py           # Sandboxed folder and file opener
+│   │   ├── music.py           # ~/Music audio player
+│   │   ├── system.py          # Desktop utilities executor
+│   │   └── result.py          # ExecutionResult data model
+│   ├── registry/              # Dynamic application discovery
+│   │   └── applications.py    # Desktop entries and binary scanner
+│   └── ui/                    # Native PySide6 Qt 6 desktop interface
+│       ├── main_window.py     # Asynchronous desktop main window
+│       ├── chat/              # Chat timeline, message items, typing indicators
+│       ├── input/             # Message input composer
+│       ├── shell/             # Header bar and collapsible sidebar
+│       └── themes/            # Dark and light theme manager
+├── languages/                 # Modular language packs
+│   ├── fa/                    # Persian language pack (manifest, intents, rules)
+│   └── en/                    # English language pack
+├── tests/                     # Automated test suite (73 tests)
+├── docs/                      # Architectural and technical documentation
+├── main.py                    # Main desktop application entrypoint
+├── requirements.txt           # Runtime dependencies
+├── requirements-dev.txt       # Development & test dependencies
+└── pyproject.toml             # Modern package configuration
 ```
 
 ---
 
 ## 3. Asynchronous Concurrency
 
-To ensure the desktop UI remains fluid and responsive (preventing GUI freezes when searching directories or launching external processes):
-- The `MainWindow` employs `QThread` and `QObject` worker patterns.
-- Command processing runs on a separate worker thread.
-- Results are signaled back to the Qt main event loop for message bubble rendering.
+To ensure the desktop UI remains fluid and responsive:
+* The `MainWindow` employs `QThread` and `QObject` worker patterns (`ExecutionWorker`).
+* Command processing and intent execution run on background threads.
+* UI slots handle completion events on the main thread, guaranteeing that background tasks never freeze the interface.
+* In the event of an unhandled exception, `ExecutionWorker` safely emits a fallback error result, ensuring the user input composer is never permanently locked.
 
 ---
 
-## 4. Future AI Extensibility
+## 4. Policy Engine Lifecycle
 
-The `BaseIntentParser` interface is abstract:
-```python
-class BaseIntentParser(ABC):
-    @abstractmethod
-    def parse(self, text: str, context: Optional[dict[str, Any]] = None) -> Intent:
-        pass
-```
-In future releases, an `AIIntentParser` or hybrid parser can be plugged into `IntentRouter` without altering executors, UI components, or language pack structures.
+Every parsed intent is audited by `PolicyEngine.evaluate(intent)`:
+* **ALLOW:** Low-risk standard operations (opening browser, navigating to Downloads, playing music) proceed directly to capability execution.
+* **CONFIRM:** High-risk system operations (shutdown, reboot, file deletion) establish an interaction state (`AWAITING_CONFIRMATION`). The system prompts the user and executes only upon positive confirmation.
+* **DENY:** Destructive or privileged commands (`rm`, `sudo`, `mkfs`) are intercepted before execution, returning `STATUS_PERMISSION_DENIED` with `executed=False`.

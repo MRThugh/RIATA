@@ -86,7 +86,10 @@ export function App() {
     try {
       const res = await fetch("/api/command", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-RIATA-Client": "web-v0.1.1",
+        },
         body: JSON.stringify({ text: textToSend, dry_run: dryRun }),
       });
 
@@ -148,7 +151,11 @@ export function App() {
     setIsRunningTests(true);
     setTestOutput("Running 'pytest -v' against full test suite...\n");
     try {
-      const res = await fetch("/api/run-tests");
+      const res = await fetch("/api/run-tests", {
+        headers: {
+          "X-RIATA-Client": "web-v0.1.1",
+        },
+      });
       const data = await res.json();
       setTestOutput(data.output || "Test completed.");
     } catch (err: any) {

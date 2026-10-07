@@ -1,5 +1,5 @@
 """
-Unit tests for Language Loader and Detector in R.I.A.T.A v0.1.0
+Unit tests for Language Loader and Detector in R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 """
 

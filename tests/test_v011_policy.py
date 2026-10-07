@@ -77,3 +77,24 @@ def test_policy_custom_rule():
     eval_res = pe.evaluate(Intent(name="RESTRICTED_APP", confidence=1.0))
     assert eval_res.decision == DECISION_DENY
     assert eval_res.reason == "App restricted"
+
+
+def test_policy_confirmation_cycle_in_router():
+    """Verify that a high-risk action prompts for confirmation and transitions to ALLOW upon 'yes'."""
+    from app.engine.router import get_intent_router
+    router = get_intent_router()
+    router.reset_context()
+
+    # Step 1: Simulate high-risk intent trigger
+    shutdown_intent = Intent(name="SHUTDOWN", confidence=1.0, language="en")
+    router.interaction_context.set_pending_confirmation(
+        intent=shutdown_intent, action_label="shutdown system", language="en"
+    )
+    assert router.interaction_context.awaiting_confirmation is True
+
+    # Step 2: User responds with "yes"
+    output = router.process("yes")
+    # Intent should be processed as the confirmed intent, not stuck in a confirmation loop
+    assert output.intent.name == "SHUTDOWN"
+    assert router.interaction_context.awaiting_confirmation is False
+

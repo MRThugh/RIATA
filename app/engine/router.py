@@ -42,7 +42,7 @@ from app.executor.result import (
 from app.interaction.context import InteractionContext
 from app.interaction.responses import ResponseEngine, get_response_engine
 from app.languages.registry import LanguagePack, LanguageRegistry, get_language_registry
-from app.policy.decision import PolicyEvaluation
+from app.policy.decision import DECISION_ALLOW, PolicyEvaluation
 from app.policy.engine import PolicyEngine, get_policy_engine
 
 logger = get_logger("riata.router")
@@ -87,9 +87,11 @@ class IntentRouter:
         context_action, context_payload = self.interaction_context.evaluate_turn(user_input)
 
         intent: Optional[Intent] = None
+        is_user_confirmed = False
         if context_action == "CONFIRM":
             # User confirmed the pending high-risk intent!
             intent = context_payload
+            is_user_confirmed = True
             logger.info("Confirmed pending intent: %s", intent.name if intent else "")
         elif context_action == "CANCEL":
             # User cancelled the pending interaction
@@ -160,6 +162,15 @@ class IntentRouter:
                 intent=intent,
                 result=res,
                 direction=direction,
+            )
+
+        # If user explicitly confirmed this high-risk intent in this turn, allow execution
+        if is_user_confirmed and policy.requires_confirmation:
+            policy = PolicyEvaluation(
+                decision=DECISION_ALLOW,
+                risk_level=policy.risk_level,
+                action_label=policy.action_label,
+                reason="User explicitly confirmed operation.",
             )
 
         # 3b. Confirmation required by policy

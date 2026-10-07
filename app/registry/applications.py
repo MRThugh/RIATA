@@ -1,5 +1,5 @@
 """
-Extensible application registry and system detector for R.I.A.T.A v0.1.0
+Extensible application registry and system detector for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 Security Hardening: Strict allowlist enforcement, robust .desktop parsing, and rejection of dangerous binaries.
 """

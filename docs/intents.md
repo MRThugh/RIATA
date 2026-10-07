@@ -1,33 +1,35 @@
 # R.I.A.T.A — Intent Reference
-**Responsive Intent Automation & Task Assistant (v0.1.0)**  
+**Responsive Intent Automation & Task Assistant (v0.1.1)**  
 **Author:** Ali Kamrani (MRThugh)  
 
 ---
 
-## Supported Intents
+## Supported Intents in v0.1.1
 
-| Intent | Description | Sample Persian Input | Sample English Input | Extracted Entities |
-|---|---|---|---|---|
-| `OPEN_APPLICATION` | Launches registered desktop applications | `فایرفاکس رو باز کن` | `Open Firefox` | `application`: `"firefox"` |
-| `OPEN_FOLDER` | Opens standard user directories | `Downloads رو باز کن` | `Open Downloads` | `folder`: `"Downloads"` |
-| `OPEN_FILE` | Opens safe file within user home | `فایل report.pdf رو باز کن` | `Open file report.pdf` | `file`: `"report.pdf"` |
-| `PLAY_MUSIC` | Searches local `~/Music` directory and plays | `آهنگ Another Love رو پخش کن` | `Play Another Love` | `song`: `"Another Love"` |
-| `OPEN_TERMINAL` | Launches default terminal emulator | `ترمینال رو باز کن` | `Open terminal` | *(None)* |
-| `OPEN_FILE_MANAGER`| Opens Ubuntu file manager | `فایل منیجر رو باز کن` | `Open file manager` | *(None)* |
-| `OPEN_SETTINGS` | Opens desktop control center | `تنظیمات رو باز کن` | `Open settings` | *(None)* |
-| `SHOW_SYSTEM_INFO` | Gathers OS, kernel, CPU, RAM, hostname | `مشخصات سیستم` | `System info` | *(None)* |
-| `TAKE_SCREENSHOT` | Takes safe screenshot to `~/Pictures` | `اسکرین شات بگیر` | `Take a screenshot` | *(None)* |
-| `EXIT_APPLICATION` | Gracefully closes R.I.A.T.A | `ریاتا رو ببند` | `Close riata` | *(None)* |
-| `CLARIFY` | Prompts user when request is ambiguous | `اون رو باز کن` | `Open that` | *(None)* |
-| `UNKNOWN` | Suggests example syntax for unrecognized commands | `xyz 123` | `foo bar` | *(None)* |
+| Intent | Capability | Description | Sample Persian Input | Sample English Input | Extracted Entities |
+|---|---|---|---|---|---|
+| `OPEN_APPLICATION` | `applications` | Launches registered desktop applications | `فایرفاکس رو باز کن` | `Open Firefox` | `application`: `"firefox"` |
+| `OPEN_FOLDER` | `filesystem` | Opens standard user directories | `Downloads رو باز کن` | `Open Downloads` | `folder`: `"Downloads"` |
+| `OPEN_FILE` | `filesystem` | Opens safe file within user home sandbox | `فایل report.pdf رو باز کن` | `Open file report.pdf` | `file`: `"report.pdf"` |
+| `PLAY_MUSIC` | `media` | Searches `~/Music` directory and plays audio | `آهنگ Another Love رو پخش کن` | `Play Another Love` | `song`: `"Another Love"` |
+| `OPEN_TERMINAL` | `system` | Launches default terminal emulator | `ترمینال رو باز کن` | `Open terminal` | *(None)* |
+| `OPEN_FILE_MANAGER`| `system` | Opens system file manager | `فایل منیجر رو باز کن` | `Open file manager` | *(None)* |
+| `OPEN_SETTINGS` | `system` | Opens desktop control center | `تنظیمات رو باز کن` | `Open settings` | *(None)* |
+| `SHOW_SYSTEM_INFO` | `system` | Gathers OS, kernel, CPU, RAM, hostname | `مشخصات سیستم` | `System info` | *(None)* |
+| `TAKE_SCREENSHOT` | `system` | Captures screenshot to `~/Pictures` | `اسکرین شات بگیر` | `Take a screenshot` | *(None)* |
+| `EXIT_APPLICATION` | `system` | Gracefully closes R.I.A.T.A | `ریاتا رو ببند` | `Close riata` | *(None)* |
+| `CLARIFY` | *(Engine)* | Prompts user when request is ambiguous | `اون رو باز کن` | `Open that` | *(None)* |
+| `CONFIRM` | *(Context)* | Confirms a pending high-risk action | `بله` / `آره` | `yes` / `confirm` | *(None)* |
+| `CANCEL` | *(Context)* | Cancels a pending action or selection | `کنسل` / `نه` | `cancel` / `no` | *(None)* |
+| `UNKNOWN` | *(Engine)* | Provides example syntax for unrecognized inputs | `xyz 123` | `foo bar` | *(None)* |
 
 ---
 
-## Adding a New Intent
+## Adding a New Intent in v0.1.1
 
-To introduce a new intent (e.g., `CHECK_BATTERY`):
+To introduce a new intent (e.g. `CHECK_BATTERY`):
 1. **Define Constant:** Add `INTENT_CHECK_BATTERY = "CHECK_BATTERY"` to `app/core/constants.py`.
-2. **Grammar & Patterns:** In each language pack (`languages/<lang>/intents.json`), add regular expressions and keywords.
-3. **Response Strings:** In `languages/<lang>/language.json`, define localized success and error messages.
-4. **Executor:** In `app/executor/system.py` (or a dedicated executor), create `execute_check_battery(intent: Intent) -> ExecutionResult`.
-5. **Dispatch:** Register the handler in `app/engine/router.py`.
+2. **Grammar & Patterns:** In each language pack (`languages/<lang>/intents.json`), add regular expressions and pattern rules.
+3. **Responses:** In `languages/<lang>/responses.json`, define localized feedback templates.
+4. **Capability Execution:** Implement the action in the corresponding capability (e.g. `app/capabilities/system.py`).
+5. **Policy Definition:** If the action poses system risk, register it in `HIGH_RISK_INTENTS` in `app/policy/engine.py`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 R.I.A.T.A — Responsive Intent Automation & Task Assistant
-Version: 0.1.0
+Version: 0.1.1
 Author: Ali Kamrani (MRThugh)
 GitHub: https://github.com/MRThugh/RIATA
 License: MIT

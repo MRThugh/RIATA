@@ -110,7 +110,7 @@ def test_symlink_to_file_outside_rejected(tmp_path: Path):
 
 
 def test_sensitive_credentials_subdirs_rejected(tmp_path: Path):
-    """Verify access to sensitive credential directories like .ssh and .gnupg is blocked."""
+    """Verify access to sensitive credential directories like .ssh, .gnupg, .aws, .docker is blocked."""
     home = tmp_path / "home" / "user"
     home.mkdir(parents=True)
 
@@ -119,6 +119,15 @@ def test_sensitive_credentials_subdirs_rejected(tmp_path: Path):
 
     gnupg_key = home / ".gnupg" / "secring.gpg"
     assert is_allowed_path(gnupg_key, base_dir=home, allow_tmp=False) is False
+
+    aws_cred = home / ".aws" / "credentials"
+    assert is_allowed_path(aws_cred, base_dir=home, allow_tmp=False) is False
+
+    docker_config = home / ".docker" / "config.json"
+    assert is_allowed_path(docker_config, base_dir=home, allow_tmp=False) is False
+
+    kube_config = home / ".kube" / "config"
+    assert is_allowed_path(kube_config, base_dir=home, allow_tmp=False) is False
 
 
 def test_resolve_folder_path_security(tmp_path: Path):
