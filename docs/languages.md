@@ -8,7 +8,7 @@
 
 R.I.A.T.A features an extensible **Language Registry** architecture. The core intent engine and executors are language-agnostic and consume Language Packs dynamically discovered from the `languages/` directory at runtime.
 
-### Bundled Language Packs in v0.1.1:
+### Bundled Language Packs in v0.2.0:
 * `fa` (Persian / فارسی) — Right-to-Left (RTL) layout
 * `en` (English) — Left-to-Right (LTR) layout
 

@@ -1,5 +1,5 @@
 """
-System capability for R.I.A.T.A v0.1.1
+System capability for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 

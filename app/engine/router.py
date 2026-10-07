@@ -134,15 +134,18 @@ class IntentRouter:
         # =====================================================================
         if cleaned_input.lower() in (
             "فراموشش کن",
+            "فراموش کن",
             "شروع دوباره",
             "بازنشانی",
             "ریست",
             "لغو زمینه",
             "forget it",
+            "forget",
             "reset context",
             "start over",
             "clear context",
         ):
+            session_ctx.clear()
             self.context_manager.reset(session_id)
             self.reset_context()
             reset_intent = Intent(
@@ -177,8 +180,17 @@ class IntentRouter:
             if pack.is_confirmation(lowered) or lowered in ("yes", "y", "بله", "آره", "اره", "تایید"):
                 confirmed_intent = None
                 action_label = ""
+                resumed_plan = getattr(session_ctx, "pending_plan", None)
+                plan_step_idx = getattr(session_ctx, "pending_step_index", 0)
+
                 if pending_conf:
-                    confirmed_intent = self.context_manager.consume_pending_confirmation(session_id)
+                    # Verify action and entity fingerprint
+                    confirmed_intent = self.context_manager.consume_pending_confirmation(
+                        session_id=session_id,
+                        confirmation_id=pending_conf.confirmation_id,
+                        expected_intent_name=pending_conf.action,
+                        expected_entities=pending_conf.entities,
+                    )
                     action_label = pending_conf.action_label
                     self.interaction_context.clear()
                     self.context.clear()
@@ -189,17 +201,40 @@ class IntentRouter:
                     self.context.clear()
 
                 if confirmed_intent:
-                    logger.info("Session '%s': Confirmed high-risk operation %s", session_id, confirmed_intent.name)
-                    # Authoritative Policy override: user explicitly confirmed this turn
-                    policy = PolicyEvaluation(
-                        decision=DECISION_ALLOW,
-                        risk_level="high",
-                        action_label=action_label,
-                        reason="User explicitly confirmed operation.",
-                    )
+                    logger.info("Session '%s': Confirmed operation %s", session_id, confirmed_intent.name)
+                    # Authoritative Policy re-check (Section 17): Confirmation must NEVER bypass policy!
+                    policy = self.policy_engine.evaluate(confirmed_intent)
+                    if confirmed_intent.is_dangerous or policy.is_denied:
+                        logger.warning("Denied confirmed operation by security policy: %s", confirmed_intent.name)
+                        session_ctx.pending_plan = None
+                        res = ExecutionResult(
+                            success=False,
+                            executed=False,
+                            status=STATUS_PERMISSION_DENIED,
+                            intent_name=confirmed_intent.name,
+                            message="Action blocked for security reasons.",
+                            error="Action blocked for security reasons.",
+                        )
+                        resp_text = self.response_generator.generate(res, confirmed_intent, policy)
+                        return ProcessOutput(
+                            response_text=resp_text,
+                            intent=confirmed_intent,
+                            result=res,
+                            direction=direction,
+                            session_id=session_id,
+                        )
+
+                    # Dispatch to capability (includes capability validation contract check)
                     res = self._dispatch_capability(confirmed_intent)
                     session_ctx.record_turn(confirmed_intent, res)
-                    resp_text = self.response_generator.generate(res, confirmed_intent, policy)
+
+                    # Multi-step resume if part of a pending plan (Section 18)
+                    if resumed_plan and 0 <= plan_step_idx < len(resumed_plan.steps):
+                        return self._resume_multi_step_plan(
+                            resumed_plan, plan_step_idx, confirmed_intent, res, session_ctx, session_id, lang
+                        )
+
+                    resp_text = self.response_generator.generate(res, confirmed_intent)
                     self._sync_backwards_compat(session_ctx)
                     return ProcessOutput(
                         response_text=resp_text,
@@ -211,6 +246,8 @@ class IntentRouter:
             elif pack.is_cancellation(lowered) or lowered in ("no", "n", "نه", "خیر", "لغو", "کنسل"):
                 if pending_conf:
                     self.context_manager.reject_pending_confirmation(session_id)
+                session_ctx.pending_plan = None
+                session_ctx.pending_step_index = 0
                 self.interaction_context.clear()
                 self.context.clear()
                 logger.info("Session '%s': Cancelled pending confirmation", session_id)
@@ -325,6 +362,32 @@ class IntentRouter:
         # 5. Build Command Plan (Single or Multi-Step)
         # =====================================================================
         plan = self.planner.build_plan(cleaned_input, context=session_ctx)
+
+        # Plan size rejection (Section 21: Never silently truncate user commands)
+        if plan.status == "PLAN_TOO_LARGE":
+            max_allowed = plan.metadata.get("max_allowed", 5)
+            clause_cnt = plan.metadata.get("clause_count", 0)
+            msg = (
+                f"تعداد مراحل دستور ({clause_cnt}) بیش از سقف مجاز ({max_allowed}) است. لطفاً دستور را به بخش‌های ساده‌تر تقسیم کنید."
+                if lang == "fa"
+                else f"Command contains too many steps ({clause_cnt}). Maximum allowed is {max_allowed}. Please simplify your command."
+            )
+            res = ExecutionResult(
+                success=False,
+                executed=False,
+                status=STATUS_INVALID_COMMAND,
+                intent_name=INTENT_UNKNOWN,
+                message=msg,
+                error=msg,
+            )
+            return ProcessOutput(
+                response_text=msg,
+                intent=plan.steps[0].intent if plan.steps else Intent.unknown(cleaned_input),
+                result=res,
+                direction=direction,
+                plan=plan,
+                session_id=session_id,
+            )
 
         # Case 5A: Single-Step Plan
         if plan.is_single_step:
@@ -554,7 +617,38 @@ class IntentRouter:
         for i, step in enumerate(plan.steps):
             intent = step.intent
 
-            # Resolve Contextual Entities per step
+            # 1. Dependency enforcement (Section 20)
+            if step.dependencies:
+                dep_blocked = False
+                blocking_step = None
+                for dep in step.dependencies:
+                    pred = (
+                        plan.steps[dep]
+                        if 0 <= dep < len(plan.steps)
+                        else next((s for s in plan.steps if s.step_id == dep), None)
+                    )
+                    if not pred or pred.status != "SUCCESS":
+                        dep_blocked = True
+                        blocking_step = pred
+                        break
+                if dep_blocked:
+                    pred_status = blocking_step.status if blocking_step else "UNKNOWN"
+                    step.status = "BLOCKED" if pred_status in ("FAILED", "BLOCKED") else "SKIPPED"
+                    step.error = f"Prerequisite step was not successful (status: {pred_status})."
+                    step.result = ExecutionResult(
+                        success=False,
+                        executed=False,
+                        status=STATUS_FAILED,
+                        intent_name=intent.name,
+                        message=step.error,
+                        error=step.error,
+                    )
+                    step_responses.append(f"✕ {intent.name}: {step.error}")
+                    any_failed = True
+                    self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                    break
+
+            # 2. Resolve Contextual Entities per step
             res_result = self.resolver.resolve(
                 raw_text=step.raw_text,
                 parsed_intent_name=intent.name,
@@ -566,7 +660,7 @@ class IntentRouter:
                 intent.entities.update(res_result.entities)
                 step.entities.update(res_result.entities)
 
-            # Policy Check
+            # 3. Policy Check
             policy: PolicyEvaluation = self.policy_engine.evaluate(intent)
             if intent.is_dangerous or policy.is_denied:
                 step.status = "BLOCKED"
@@ -583,12 +677,15 @@ class IntentRouter:
                 break
 
             if policy.requires_confirmation:
-                # Multi-step command paused for confirmation
+                # Multi-step command paused for confirmation (Section 18)
                 self.context_manager.set_pending_confirmation(
                     session_id=session_id,
                     intent=intent,
                     action_label=policy.action_label,
+                    plan_id=plan.plan_id,
                 )
+                session_ctx.pending_plan = plan
+                session_ctx.pending_step_index = i
                 step.status = "PENDING"
                 conf_msg = pack.get_response(
                     "confirm_action",
@@ -596,10 +693,10 @@ class IntentRouter:
                     action=policy.action_label or intent.name,
                 )
                 step_responses.append(f"⚠️ {conf_msg}")
-                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                # Pauses execution cleanly: remaining steps wait for user confirmation
                 break
 
-            # Execute Capability
+            # 4. Execute Capability (with contract validation)
             step_res = self._dispatch_capability(intent)
             step.result = step_res
 
@@ -649,6 +746,197 @@ class IntentRouter:
             session_id=session_id,
         )
 
+    def _resume_multi_step_plan(
+        self,
+        plan: CommandPlan,
+        confirmed_step_idx: int,
+        confirmed_intent: Intent,
+        confirmed_result: ExecutionResult,
+        session_ctx: SessionContext,
+        session_id: str,
+        lang: str,
+    ) -> ProcessOutput:
+        """
+        Resume multi-step plan after explicit user confirmation of paused step.
+        Executes remaining eligible steps through full pipeline (resolver, policy, capability validation).
+        """
+        pack = self.loader.get(lang)
+        direction = pack.direction
+        step_responses: list[str] = []
+
+        confirmed_step = plan.steps[confirmed_step_idx]
+        confirmed_step.result = confirmed_result
+
+        if confirmed_result.success:
+            confirmed_step.status = "SUCCESS"
+            msg = self.response_generator.generate(confirmed_result, confirmed_intent)
+            step_responses.append(msg)
+        else:
+            confirmed_step.status = "FAILED"
+            confirmed_step.error = confirmed_result.error or confirmed_result.message
+            msg = self.response_generator.generate(confirmed_result, confirmed_intent)
+            step_responses.append(msg)
+            self._mark_remaining_steps(plan.steps[confirmed_step_idx + 1:], "SKIPPED")
+            session_ctx.pending_plan = None
+            session_ctx.pending_step_index = 0
+            return ProcessOutput(
+                response_text="\n".join(step_responses),
+                intent=confirmed_intent,
+                result=confirmed_result,
+                direction=direction,
+                plan=plan,
+                session_id=session_id,
+            )
+
+        any_failed = False
+        any_success = True
+
+        for i in range(confirmed_step_idx + 1, len(plan.steps)):
+            step = plan.steps[i]
+            intent = step.intent
+
+            # Dependency enforcement
+            if step.dependencies:
+                dep_blocked = False
+                blocking_step = None
+                for dep in step.dependencies:
+                    pred = (
+                        plan.steps[dep]
+                        if 0 <= dep < len(plan.steps)
+                        else next((s for s in plan.steps if s.step_id == dep), None)
+                    )
+                    if not pred or pred.status != "SUCCESS":
+                        dep_blocked = True
+                        blocking_step = pred
+                        break
+                if dep_blocked:
+                    pred_status = blocking_step.status if blocking_step else "UNKNOWN"
+                    step.status = "BLOCKED" if pred_status in ("FAILED", "BLOCKED") else "SKIPPED"
+                    step.error = f"Prerequisite step was not successful (status: {pred_status})."
+                    step.result = ExecutionResult(
+                        success=False,
+                        executed=False,
+                        status=STATUS_FAILED,
+                        intent_name=intent.name,
+                        message=step.error,
+                        error=step.error,
+                    )
+                    step_responses.append(f"✕ {intent.name}: {step.error}")
+                    any_failed = True
+                    self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                    break
+
+            # Resolve Contextual Entities per step
+            res_result = self.resolver.resolve(
+                raw_text=step.raw_text,
+                parsed_intent_name=intent.name,
+                extracted_entities=intent.entities,
+                context=session_ctx,
+                language=intent.language or lang,
+            )
+            if res_result.resolved and res_result.entities:
+                intent.entities.update(res_result.entities)
+                step.entities.update(res_result.entities)
+
+            # Policy Check
+            policy = self.policy_engine.evaluate(intent)
+            if intent.is_dangerous or policy.is_denied:
+                step.status = "BLOCKED"
+                step.result = ExecutionResult(
+                    success=False,
+                    executed=False,
+                    status=STATUS_PERMISSION_DENIED,
+                    intent_name=intent.name,
+                    message="Blocked by security policy.",
+                )
+                step_responses.append(f"✕ {intent.name}: Action blocked for security reasons.")
+                any_failed = True
+                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                break
+
+            if policy.requires_confirmation:
+                self.context_manager.set_pending_confirmation(
+                    session_id=session_id,
+                    intent=intent,
+                    action_label=policy.action_label,
+                    plan_id=plan.plan_id,
+                )
+                session_ctx.pending_plan = plan
+                session_ctx.pending_step_index = i
+                step.status = "PENDING"
+                conf_msg = pack.get_response(
+                    "confirm_action",
+                    default="Are you sure you want to {action}? (yes / no)",
+                    action=policy.action_label or intent.name,
+                )
+                step_responses.append(f"⚠️ {conf_msg}")
+                return ProcessOutput(
+                    response_text="\n".join(step_responses),
+                    intent=intent,
+                    result=ExecutionResult(
+                        success=True,
+                        executed=False,
+                        status=STATUS_NEEDS_CONFIRMATION,
+                        intent_name=intent.name,
+                        message=conf_msg,
+                    ),
+                    direction=direction,
+                    plan=plan,
+                    session_id=session_id,
+                )
+
+            # Execute Capability with contract validation
+            step_res = self._dispatch_capability(intent)
+            step.result = step_res
+
+            if step_res.success:
+                step.status = "SUCCESS"
+                any_success = True
+                session_ctx.record_turn(intent, step_res)
+                msg = self.response_generator.generate(step_res, intent, policy)
+                step_responses.append(msg)
+            else:
+                step.status = "FAILED"
+                step.error = step_res.error or step_res.message
+                any_failed = True
+                msg = self.response_generator.generate(step_res, intent, policy)
+                step_responses.append(msg)
+                self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
+                break
+
+        # Invalidate pending plan once fully completed
+        session_ctx.pending_plan = None
+        session_ctx.pending_step_index = 0
+
+        if any_success and not any_failed:
+            plan.status = "SUCCESS"
+            overall_status = STATUS_SUCCESS
+        elif any_success and any_failed:
+            plan.status = "PARTIAL_SUCCESS"
+            overall_status = STATUS_PARTIAL_SUCCESS
+        else:
+            plan.status = "FAILED"
+            overall_status = STATUS_FAILED
+
+        joined_response = "\n".join(step_responses)
+        combined_result = ExecutionResult(
+            success=any_success,
+            executed=any_success,
+            status=overall_status,
+            intent_name="MULTI_STEP_PLAN",
+            message=joined_response,
+            data={"steps_count": len(plan.steps), "plan_status": plan.status},
+        )
+
+        return ProcessOutput(
+            response_text=joined_response,
+            intent=plan.steps[0].intent,
+            result=combined_result,
+            direction=direction,
+            plan=plan,
+            session_id=session_id,
+        )
+
     def _mark_remaining_steps(self, steps: list[CommandStep], status: str) -> None:
         """Mark subsequent unexecuted steps as SKIPPED or CANCELLED."""
         for step in steps:
@@ -662,9 +950,27 @@ class IntentRouter:
             )
 
     def _dispatch_capability(self, intent: Intent) -> ExecutionResult:
-        """Route intent to matched Capability provider."""
+        """Route intent to matched Capability provider with validation contract."""
         capability = self.capabilities.find_for_intent(intent.name)
         if capability:
+            # Capability validate contract (Section 23)
+            is_valid, err_msg = capability.validate(intent)
+            if not is_valid:
+                logger.warning(
+                    "Capability '%s' validation rejected intent '%s': %s",
+                    capability.id,
+                    intent.name,
+                    err_msg,
+                )
+                return ExecutionResult(
+                    success=False,
+                    executed=False,
+                    status=STATUS_INVALID_COMMAND,
+                    intent_name=intent.name,
+                    error=err_msg or "Capability validation failed.",
+                    message=err_msg or "Invalid parameters for command.",
+                )
+
             try:
                 return capability.execute(intent)
             except Exception as e:

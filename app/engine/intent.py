@@ -1,5 +1,5 @@
 """
-Intent representation for R.I.A.T.A v0.1.1
+Intent representation for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 
@@ -54,6 +54,21 @@ class Intent:
             "clarification_prompt": self.clarification_prompt,
             "is_dangerous": self.is_dangerous,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Intent":
+        """Reconstruct Intent from serializable dictionary."""
+        return cls(
+            name=data.get("name", INTENT_UNKNOWN),
+            confidence=float(data.get("confidence", 0.0)),
+            entities=dict(data.get("entities", {})),
+            raw_text=data.get("raw_text", ""),
+            normalized_text=data.get("normalized_text", ""),
+            language=data.get("language", "en"),
+            is_clarification_needed=bool(data.get("is_clarification_needed", False)),
+            clarification_prompt=data.get("clarification_prompt", ""),
+            is_dangerous=bool(data.get("is_dangerous", False)),
+        )
 
     @classmethod
     def unknown(cls, raw_text: str, language: str = "en") -> "Intent":

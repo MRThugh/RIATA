@@ -1,5 +1,5 @@
 """
-Notifications capability foundation for R.I.A.T.A v0.1.1
+Notifications capability foundation for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 
@@ -10,6 +10,9 @@ from app.executor.result import STATUS_NOT_SUPPORTED, ExecutionResult
 
 class NotificationsCapability(BaseCapability):
     """Architectural foundation for desktop notifications."""
+
+    availability: str = "foundation"
+    platform_support: tuple[str, ...] = ("linux",)
 
     @property
     def id(self) -> str:
@@ -29,5 +32,5 @@ class NotificationsCapability(BaseCapability):
             executed=False,
             status=STATUS_NOT_SUPPORTED,
             intent_name=intent.name,
-            message="Notifications capability is under active development in v0.1.1.",
+            message="Desktop notifications capability is an architectural foundation planned for future releases (platform notification daemon required).",
         )

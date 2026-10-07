@@ -55,7 +55,7 @@ class ResponseEngine:
             )
 
         # 2. Confirmation required
-        if (policy and policy.requires_confirmation) or result.status == "NEEDS_CONFIRMATION":
+        if result.status == "NEEDS_CONFIRMATION" or (result.status != "SUCCESS" and policy and policy.requires_confirmation):
             if result.message and ("تأیید" in result.message or "Are you sure" in result.message):
                 return result.message
             if intent.name == "DELETE_FILE" and intent.entities.get("file"):

@@ -3,6 +3,8 @@ Applications capability for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 
+from typing import Optional
+
 from app.capabilities.base import BaseCapability
 from app.core.constants import (
     INTENT_CLOSE_APPLICATION,
@@ -35,6 +37,9 @@ class ApplicationsCapability(BaseCapability):
     @property
     def supported_intents(self) -> tuple[str, ...]:
         return (INTENT_OPEN_APPLICATION, INTENT_CLOSE_APPLICATION, INTENT_OPEN_URL)
+
+    def validate(self, intent: Intent) -> tuple[bool, Optional[str]]:
+        return super().validate(intent)
 
     def execute(self, intent: Intent) -> ExecutionResult:
         if intent.name == INTENT_OPEN_APPLICATION:

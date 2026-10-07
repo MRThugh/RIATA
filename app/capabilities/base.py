@@ -15,6 +15,9 @@ from app.executor.result import ExecutionResult
 class BaseCapability(ABC):
     """Abstract base class for all desktop interaction capabilities."""
 
+    availability: str = "implemented"
+    platform_support: tuple[str, ...] = ("linux",)
+
     @property
     @abstractmethod
     def id(self) -> str:
@@ -62,4 +65,6 @@ class BaseCapability(ABC):
             "name": self.name,
             "supported_intents": list(self.supported_intents),
             "description": (self.__doc__ or self.name).strip(),
+            "availability": self.availability,
+            "platform_support": list(self.platform_support),
         }

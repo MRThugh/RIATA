@@ -77,17 +77,13 @@ class ContextualEntityResolver:
         if parsed_intent_name == "CLOSE_APPLICATION":
             app_entity = entities.get("application")
 
-            # Check if reference is explicit or a pronoun (e.g. "ببندش", "close it", "ببند")
-            is_pronoun_reference = (
-                not app_entity
-                or app_entity in ("ش", "it", "that", "این", "اون", "همونو")
-                or bool(self.FA_PRONOUN_SUFFIX.search(lowered))
-                or "ببندش" in lowered
-                or "close it" in lowered
+            # Check if reference is explicit (e.g. "Chrome را ببند") or pronoun/relative ("ببندش", "close it", "ببند")
+            is_explicit_app = bool(
+                app_entity and str(app_entity).strip() not in ("ش", "it", "that", "این", "اون", "همونو", "همین")
             )
 
-            if is_pronoun_reference:
-                # Ambiguity Check: Do we have multiple candidates?
+            if not is_explicit_app:
+                # Ambiguity Check: Do we have multiple active candidates?
                 active_candidates = [
                     a for a in context.open_applications if a
                 ]
@@ -124,6 +120,13 @@ class ContextualEntityResolver:
                         entities=entities,
                         target_intent="CLOSE_APPLICATION",
                     )
+            else:
+                # Explicit application specified by user — explicit entity MUST win!
+                return ResolutionResult(
+                    resolved=True,
+                    entities=entities,
+                    target_intent="CLOSE_APPLICATION",
+                )
 
         # 3. Handle CREATE_FILE contextual locative resolution ("داخلش فایل test.txt رو بساز")
         if parsed_intent_name == "CREATE_FILE":
@@ -146,14 +149,10 @@ class ContextualEntityResolver:
         # 4. Handle DELETE_FILE contextual resolution ("حذفش کن", "delete it")
         if parsed_intent_name == "DELETE_FILE":
             file_entity = entities.get("file")
-            is_file_pronoun = (
-                not file_entity
-                or file_entity in ("ش", "it", "that", "این", "اون", "همونو")
-                or "حذفش کن" in lowered
-                or "پاکش کن" in lowered
-                or "delete it" in lowered
+            is_explicit_file = bool(
+                file_entity and str(file_entity).strip() not in ("ش", "it", "that", "این", "اون", "همونو")
             )
-            if is_file_pronoun and context.active_file:
+            if not is_explicit_file and context.active_file:
                 entities["file"] = context.active_file
                 logger.info("Contextually resolved active file '%s' for DELETE_FILE", context.active_file)
                 return ResolutionResult(
@@ -165,7 +164,10 @@ class ContextualEntityResolver:
         # 5. Handle OPEN_APPLICATION / OPEN_FOLDER contextual references ("بازش کن", "همونو باز کن")
         if parsed_intent_name == "OPEN_APPLICATION":
             app_entity = entities.get("application")
-            if (not app_entity or app_entity in ("ش", "it", "همونو", "همین")) and context.active_application:
+            is_explicit_app = bool(
+                app_entity and str(app_entity).strip() not in ("ش", "it", "همونو", "همین")
+            )
+            if not is_explicit_app and context.active_application:
                 entities["application"] = context.active_application
                 logger.info("Contextually resolved active application '%s'", context.active_application)
                 return ResolutionResult(

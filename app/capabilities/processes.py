@@ -1,5 +1,5 @@
 """
-Processes capability foundation for R.I.A.T.A v0.1.1
+Processes capability foundation for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 
@@ -10,6 +10,9 @@ from app.executor.result import STATUS_NOT_SUPPORTED, ExecutionResult
 
 class ProcessesCapability(BaseCapability):
     """Architectural foundation for desktop process inspection and control."""
+
+    availability: str = "foundation"
+    platform_support: tuple[str, ...] = ("linux",)
 
     @property
     def id(self) -> str:
@@ -29,5 +32,5 @@ class ProcessesCapability(BaseCapability):
             executed=False,
             status=STATUS_NOT_SUPPORTED,
             intent_name=intent.name,
-            message="Process management capability is under active development in v0.1.1.",
+            message="Process management capability is an architectural foundation planned for future releases (requires process manager integration).",
         )

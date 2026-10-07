@@ -158,3 +158,62 @@ def test_ambiguity_detection_multiple_candidates_english():
     assert res.resolved is False
     assert res.is_ambiguous is True
     assert "Which application should I close?" in res.clarification_prompt
+
+
+def test_ambiguity_no_context_returns_unresolved():
+    """Ensure pronoun reference with completely empty context does not guess."""
+    resolver = ContextualEntityResolver()
+    ctx = SessionContext(session_id="empty-ctx")
+
+    res = resolver.resolve(
+        raw_text="ببندش",
+        parsed_intent_name="CLOSE_APPLICATION",
+        extracted_entities={},
+        context=ctx,
+        language="fa",
+    )
+    assert res.resolved is False
+    assert "application" not in res.entities
+
+
+def test_locative_no_active_folder_returns_unresolved():
+    """Ensure container reference with no active directory does not hallucinate a folder."""
+    resolver = ContextualEntityResolver()
+    ctx = SessionContext(session_id="no-dir-ctx")
+
+    res = resolver.resolve(
+        raw_text="create notes.txt in it",
+        parsed_intent_name="CREATE_FILE",
+        extracted_entities={"file": "notes.txt"},
+        context=ctx,
+        language="en",
+    )
+    assert "folder" not in res.entities
+
+
+def test_delete_file_pronoun_resolution_persian_and_english():
+    """Ensure 'حذفش کن' and 'delete it' resolve to active_file."""
+    resolver = ContextualEntityResolver()
+    ctx = SessionContext(session_id="del-ctx")
+    ctx.active_file = "report.txt"
+
+    res_fa = resolver.resolve(
+        raw_text="حذفش کن",
+        parsed_intent_name="DELETE_FILE",
+        extracted_entities={},
+        context=ctx,
+        language="fa",
+    )
+    assert res_fa.resolved is True
+    assert res_fa.entities.get("file") == "report.txt"
+
+    res_en = resolver.resolve(
+        raw_text="delete it",
+        parsed_intent_name="DELETE_FILE",
+        extracted_entities={},
+        context=ctx,
+        language="en",
+    )
+    assert res_en.resolved is True
+    assert res_en.entities.get("file") == "report.txt"
+

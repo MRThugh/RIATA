@@ -1,5 +1,5 @@
 """
-Execution result representation for R.I.A.T.A v0.1.1
+Execution result representation for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 
@@ -74,3 +74,24 @@ class ExecutionResult:
             "step_id": self.step_id,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExecutionResult":
+        """Reconstruct ExecutionResult from serializable dictionary."""
+        return cls(
+            success=bool(data.get("success", False)),
+            executed=bool(data.get("executed", False)),
+            status=data.get("status", STATUS_SUCCESS),
+            message=data.get("message", ""),
+            data=data.get("data"),
+            intent_name=data.get("intent_name", ""),
+            message_key=data.get("message_key", ""),
+            params=dict(data.get("params", {})),
+            is_dry_run=bool(data.get("is_dry_run", False)),
+            action_summary=data.get("action_summary", ""),
+            error=data.get("error"),
+            requires_context=bool(data.get("requires_context", False)),
+            context_data=dict(data.get("context_data", {})),
+            step_id=data.get("step_id"),
+            metadata=dict(data.get("metadata", {})),
+        )

@@ -123,3 +123,49 @@ def test_plan_serialization():
     assert len(d["steps"]) == 2
     assert d["steps"][0]["step_id"] == 1
     assert "dependencies" in d["steps"][1]
+
+
+def test_multi_step_plan_pauses_for_confirmation_and_resumes_cleanly():
+    """Verify multi-step plan pauses at high-risk step and cleanly resumes upon user confirmation."""
+    from app.executor.result import STATUS_NEEDS_CONFIRMATION
+    from app.core.context.manager import get_context_manager
+
+    config = get_config()
+    orig_dry_run = config.dry_run
+    config.dry_run = True
+
+    try:
+        router = get_intent_router()
+        router.reset_context()
+        session_id = "test-plan-resume-session"
+
+        # Turn 1: Step 1 is low-risk (Open Firefox), Step 2 is high-risk (Delete file)
+        out1 = router.process("Firefox رو باز کن و فایل temp_notes.txt رو حذف کن", session_id=session_id)
+        assert out1.plan is not None
+        assert len(out1.plan.steps) == 2
+        # Step 1 executed successfully
+        assert out1.plan.steps[0].status == "SUCCESS"
+        # Step 2 paused for confirmation
+        assert out1.plan.steps[1].status == "PENDING"
+        assert "تأیید" in out1.response_text or "temp_notes.txt" in out1.response_text
+
+        ctx_manager = get_context_manager()
+        assert ctx_manager.get_pending_confirmation(session_id) is not None
+
+        # Turn 2: User confirms with "بله"
+        out2 = router.process("بله", session_id=session_id)
+        assert out2.result.status == STATUS_SUCCESS
+        assert out2.plan is not None
+        assert out2.plan.steps[1].status == "SUCCESS"
+        assert out2.plan.status == "SUCCESS"
+
+        # Pending plan must be invalidated once fully executed
+        session_ctx = ctx_manager.get_session(session_id)
+        assert session_ctx.pending_plan is None
+
+        # Turn 3: User says "بله" again -> confirmation cannot be replayed!
+        out3 = router.process("بله", session_id=session_id)
+        assert out3.intent.name != "DELETE_FILE"
+    finally:
+        config.dry_run = orig_dry_run
+

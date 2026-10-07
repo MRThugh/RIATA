@@ -5,11 +5,15 @@ import { spawn } from "child_process";
 import { IncomingMessage } from "http";
 
 // Client identifier token used to distinguish requests from the bundled companion
+// Note: This is a client identification header for companion routing, not an authentication credential.
 const ALLOWED_CLIENT_IDENTIFIERS = new Set(["web-v0.1.1", "web-v0.2.0"]);
 
-// Allowed loopback hostnames and remote IP addresses
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"]);
-const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1", "0.0.0.0"]);
+// Strict loopback hostnames and remote IP addresses (0.0.0.0 and LAN ranges explicitly removed)
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+// Canonical session ID format validator (1 to 64 alphanumeric characters, underscores, and hyphens)
+const SESSION_ID_REGEX = /^[A-Za-z0-9_-]{1,64}$/;
 
 interface SecurityCheckResult {
   allowed: boolean;
@@ -20,35 +24,34 @@ interface SecurityCheckResult {
 
 function isAllowedHostOrOrigin(target: string): boolean {
   if (!target) return true;
+  // Exact match against loopback hostnames
   if (LOOPBACK_HOSTNAMES.has(target)) return true;
-  if (
-    target.endsWith(".run.app") ||
-    target.endsWith(".aistudio.google") ||
-    target.endsWith(".google.internal") ||
-    target.includes("localhost") ||
-    target.includes("127.0.0.1")
-  ) {
-    return true;
+
+  // Cloud/preview host exceptions are disabled by default.
+  // Only permit preview hosts when explicitly opted-in via environment variable.
+  if (process.env.RIATA_ALLOW_PREVIEW_HOSTS === "true") {
+    if (
+      target.endsWith(".run.app") ||
+      target.endsWith(".aistudio.google") ||
+      target.endsWith(".google.internal")
+    ) {
+      return true;
+    }
   }
   return false;
 }
 
 function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
   const remoteIp = req.socket?.remoteAddress || "";
-  const isPrivateOrLoopback =
-    !remoteIp ||
-    LOOPBACK_IPS.has(remoteIp) ||
-    remoteIp.startsWith("10.") ||
-    remoteIp.startsWith("172.") ||
-    remoteIp.startsWith("192.168.") ||
-    remoteIp.startsWith("169.254.") ||
-    remoteIp.endsWith("127.0.0.1");
+  // Strictly permit loopback only. Private LAN addresses (10.x, 172.x, 192.168.x, 169.254.x) are rejected.
+  const isLoopback = !remoteIp || LOOPBACK_IPS.has(remoteIp);
+  const isPreviewOptIn = process.env.RIATA_ALLOW_PREVIEW_HOSTS === "true";
 
-  if (!isPrivateOrLoopback) {
+  if (!isLoopback && !isPreviewOptIn) {
     return {
       allowed: false,
       statusCode: 403,
-      message: `Forbidden: API access rejected from non-local remote address (${remoteIp}).`,
+      message: `Forbidden: API access rejected from non-loopback remote address (${remoteIp}). Web Companion is local-only.`,
     };
   }
 
@@ -66,12 +69,12 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     };
   }
 
-  // Validate Host header
+  // Validate Host header (exact loopback hostname matching)
   if (!isAllowedHostOrOrigin(hostHeader)) {
     return {
       allowed: false,
       statusCode: 403,
-      message: "Forbidden: Host must be local loopback or authorized preview domain.",
+      message: "Forbidden: Host must be local loopback.",
     };
   }
 
@@ -208,7 +211,7 @@ export default defineConfig({
               return;
             }
 
-            const { text, dry_run = false } = parsedBody;
+            const { text, dry_run = false, session_id = "web-companion" } = parsedBody;
 
             // 3. Schema & input validation
             if (typeof text !== "string" || !text.trim()) {
@@ -233,6 +236,21 @@ export default defineConfig({
                   success: false,
                   status: "INVALID_COMMAND",
                   message: "Command exceeds maximum length of 500 characters.",
+                  executed: false,
+                })
+              );
+              return;
+            }
+
+            // Session ID format validation
+            if (typeof session_id !== "string" || !SESSION_ID_REGEX.test(session_id)) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Invalid session_id format. Must match ^[A-Za-z0-9_-]{1,64}$.",
                   executed: false,
                 })
               );
@@ -420,40 +438,153 @@ except Exception as e:
             res.end();
             return;
           }
+
+          if (req.method !== "POST") {
+            res.statusCode = 405;
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                success: false,
+                status: "INVALID_COMMAND",
+                message: "Method not allowed. Use POST.",
+                executed: false,
+              })
+            );
+            return;
+          }
+
           if (!security.allowed) {
             res.statusCode = security.statusCode;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: security.message }));
+            res.end(
+              JSON.stringify({
+                success: false,
+                status: "PERMISSION_DENIED",
+                message: security.message,
+                executed: false,
+              })
+            );
             return;
           }
 
           let body = "";
+          let byteCount = 0;
+          const MAX_BODY_SIZE = 16 * 1024;
           req.on("data", (chunk) => {
-            body += chunk;
+            byteCount += chunk.length;
+            if (byteCount > MAX_BODY_SIZE) {
+              res.statusCode = 413;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Payload too large.",
+                  executed: false,
+                })
+              );
+              req.destroy();
+            } else {
+              body += chunk;
+            }
           });
           req.on("end", () => {
-            let sessionId = "web-companion";
+            let parsedBody: any = {};
             try {
-              const p = JSON.parse(body || "{}");
-              if (p.session_id) sessionId = p.session_id;
-            } catch {}
+              parsedBody = JSON.parse(body || "{}");
+            } catch {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Malformed JSON payload.",
+                  executed: false,
+                })
+              );
+              return;
+            }
+
+            const sessionId = parsedBody.session_id || "web-companion";
+            if (typeof sessionId !== "string" || !SESSION_ID_REGEX.test(sessionId)) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Invalid session_id format. Must match ^[A-Za-z0-9_-]{1,64}$.",
+                  executed: false,
+                })
+              );
+              return;
+            }
 
             const pyScript = `
-import json
+import json, sys, re
 from app.core.context.manager import get_context_manager
-cm = get_context_manager()
-cm.reset_session("${sessionId}")
-print(json.dumps({"success": True, "message": "Context reset successfully"}))
+
+SESSION_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
+try:
+    payload = json.loads(sys.stdin.read() or '{}')
+    session_id = str(payload.get('session_id', 'web-companion'))
+    if not SESSION_ID_PATTERN.match(session_id):
+        print(json.dumps({"success": False, "status": "INVALID_COMMAND", "message": "Invalid session_id"}))
+        sys.exit(0)
+
+    cm = get_context_manager()
+    cm.reset_session(session_id)
+    print(json.dumps({"success": True, "status": "SUCCESS", "message": "Context reset successfully"}))
+except Exception as e:
+    print(json.dumps({"success": False, "status": "FAILED", "message": str(e)}))
 `;
             const proc = spawn("python3", ["-c", pyScript]);
-            let out = "";
-            proc.stdout.on("data", (d) => {
-              out += d.toString();
-            });
-            proc.on("close", () => {
+            let stdoutData = "";
+            let stderrData = "";
+
+            const timer = setTimeout(() => {
+              proc.kill("SIGKILL");
+              res.statusCode = 504;
               res.setHeader("Content-Type", "application/json");
-              res.end(out || JSON.stringify({ success: true, message: "Context reset" }));
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "FAILED",
+                  message: "Context reset execution timed out.",
+                  executed: false,
+                })
+              );
+            }, 10000);
+
+            proc.stdout.on("data", (d) => {
+              stdoutData += d.toString();
             });
+            proc.stderr.on("data", (d) => {
+              stderrData += d.toString();
+            });
+
+            proc.on("close", (code) => {
+              clearTimeout(timer);
+              res.setHeader("Content-Type", "application/json");
+              if (stdoutData.trim()) {
+                res.end(stdoutData.trim());
+              } else {
+                res.statusCode = code === 0 ? 200 : 500;
+                res.end(
+                  JSON.stringify({
+                    success: false,
+                    status: "FAILED",
+                    message: stderrData || "Context reset process failed",
+                  })
+                );
+              }
+            });
+
+            // Write stdin data safely without string interpolation
+            proc.stdin.write(JSON.stringify({ session_id: sessionId }));
+            proc.stdin.end();
           });
         });
       },
@@ -461,6 +592,10 @@ print(json.dumps({"success": True, "message": "Context reset successfully"}))
   ],
   server: {
     port: 3000,
-    host: "0.0.0.0",
+    host: "127.0.0.1",
+  },
+  preview: {
+    port: 3000,
+    host: "127.0.0.1",
   },
 });

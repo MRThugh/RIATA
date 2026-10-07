@@ -133,8 +133,26 @@ class CommandPlanner:
         # 1. Split multi-action clauses
         clauses = self._split_clauses(clean)
         if len(clauses) > cfg.max_plan_steps:
-            logger.warning("Command clauses (%d) exceeded max allowed (%d)", len(clauses), cfg.max_plan_steps)
-            clauses = clauses[: cfg.max_plan_steps]
+            logger.warning(
+                "Command clauses (%d) exceeded max allowed (%d)", len(clauses), cfg.max_plan_steps
+            )
+            dummy_intent = Intent.unknown(clean)
+            too_large_step = CommandStep(
+                step_id=1,
+                raw_text=clean,
+                intent=dummy_intent,
+                entities={},
+                status="FAILED",
+                error=f"Command clauses ({len(clauses)}) exceeded maximum allowed ({cfg.max_plan_steps}).",
+            )
+            return CommandPlan(
+                plan_id=plan_id,
+                source_text=clean,
+                steps=[too_large_step],
+                context_snapshot=context.to_dict() if context else {},
+                status="PLAN_TOO_LARGE",
+                metadata={"clause_count": len(clauses), "max_allowed": cfg.max_plan_steps},
+            )
 
         steps: list[CommandStep] = []
         ctx_snapshot = context.to_dict() if context else {}

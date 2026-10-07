@@ -1,6 +1,6 @@
 """
 R.I.A.T.A — Responsive Intent Automation & Task Assistant
-Version: 0.1.1
+Version: 0.2.0
 Author: Ali Kamrani (MRThugh)
 Platform: Ubuntu Linux
 License: MIT

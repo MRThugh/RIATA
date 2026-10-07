@@ -76,11 +76,13 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.safe_check)
 
         arch_info = QLabel(
-            "Architecture v0.1.1:\n"
-            "• Extensible Language Package Registry\n"
-            "• Short-lived Interaction Context & Disambiguation\n"
+            "Architecture v0.2.0:\n"
+            "• Context-Aware Multi-Turn Interaction Platform\n"
+            "• Pronoun & Deictic Contextual Entity Resolution\n"
+            "• Deterministic Multi-Step Command Planner\n"
+            "• Single-Use Non-Replayable Security Tokens\n"
             "• Risk-Aware Policy Engine (ALLOW, CONFIRM, DENY)\n"
-            "• Modular Desktop Capabilities",
+            "• Modular Desktop Capabilities & Filesystem Sandbox",
             self,
         )
         arch_info.setStyleSheet("color: #64748b; font-size: 11px; line-height: 1.4;")

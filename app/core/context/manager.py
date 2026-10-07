@@ -8,9 +8,12 @@ and security-bound confirmation token tracking.
 
 from __future__ import annotations
 
+import json
+import re
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from app.core.config import get_config
@@ -22,8 +25,46 @@ if TYPE_CHECKING:
 
 logger = get_logger("riata.context.manager")
 
+# Canonical session ID validation regex (1 to 64 alphanumeric characters, underscores, and hyphens)
+SESSION_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 # Maximum concurrent sessions to keep in memory to prevent memory exhaustion
 MAX_SESSIONS = 100
+
+# Canonical session storage directory
+SESSION_STORAGE_DIR = Path("/tmp/riata_sessions")
+
+
+def is_valid_session_id(session_id: Any) -> bool:
+    """Return True if session_id is a valid, bounded, safe identifier."""
+    if not isinstance(session_id, str):
+        return False
+    return bool(SESSION_ID_REGEX.match(session_id))
+
+
+def validate_session_id(session_id: Any) -> str:
+    """
+    Validate session_id against strict whitelist format [A-Za-z0-9_-]{1,64}.
+    Raises ValueError on invalid formats. Never silently transforms or sanitizes.
+    """
+    if not isinstance(session_id, str) or not SESSION_ID_REGEX.match(session_id):
+        raise ValueError(
+            f"Invalid session_id: {session_id!r}. Must strictly match [A-Za-z0-9_-]{{1,64}}."
+        )
+    return session_id
+
+
+def get_session_file_path(session_id: str, base_dir: Optional[Path] = None) -> Path:
+    """
+    Construct safe, bounded filesystem path for session storage.
+    Enforces that target path remains strictly inside the session storage directory.
+    """
+    val_id = validate_session_id(session_id)
+    store = (base_dir or SESSION_STORAGE_DIR).resolve()
+    target = (store / f"{val_id}.json").resolve()
+    if target.parent != store:
+        raise ValueError(f"Session path escape attempt detected: {session_id!r}")
+    return target
 
 
 class ContextManager:
@@ -33,42 +74,70 @@ class ContextManager:
     Thread-safe and bounded to ensure predictable memory characteristics.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, storage_dir: Optional[Path] = None) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, SessionContext] = {}
+        self._storage_dir = storage_dir or SESSION_STORAGE_DIR
 
     def _load_session_from_disk(self, session_id: str) -> Optional[SessionContext]:
+        """
+        Safely load persisted session from disk if valid and unexpired.
+        Applies strict context_lifetime TTL check to disk files.
+        """
+        if not is_valid_session_id(session_id):
+            return None
         try:
-            import json
-            from pathlib import Path
-            clean_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
-            target = Path("/tmp/riata_sessions") / f"{clean_id}.json"
-            if target.is_file():
-                raw = json.loads(target.read_text(encoding="utf-8"))
-                return SessionContext.from_dict(raw)
-        except Exception:
-            pass
-        return None
+            target = get_session_file_path(session_id, self._storage_dir)
+            if not target.is_file():
+                return None
+
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return None
+
+            # Apply TTL check to disk session
+            cfg = get_config()
+            now = time.time()
+            stored_updated_at = float(raw.get("updated_at", 0.0))
+            if (now - stored_updated_at) > cfg.context_lifetime:
+                logger.info(
+                    "Session '%s' on disk expired (age: %.1fs > %.1fs). Removing.",
+                    session_id,
+                    now - stored_updated_at,
+                    cfg.context_lifetime,
+                )
+                try:
+                    target.unlink()
+                except Exception:
+                    pass
+                return None
+
+            # Pending confirmations and plans are invalidated across disk restoration
+            return SessionContext.from_dict(raw, restore_confirmation=False)
+        except Exception as e:
+            logger.debug("Failed loading session '%s' from disk: %s", session_id, e)
+            return None
 
     def save_session(self, session_id: str = "default") -> None:
         """Persist session context to temp store for cross-process continuity."""
+        if not is_valid_session_id(session_id):
+            return
         with self._lock:
             ctx = self._sessions.get(session_id)
             if not ctx:
                 return
             try:
-                import json
-                from pathlib import Path
-                store_dir = Path("/tmp/riata_sessions")
+                store_dir = self._storage_dir.resolve()
                 store_dir.mkdir(parents=True, exist_ok=True)
-                clean_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
-                target = store_dir / f"{clean_id}.json"
-                target.write_text(json.dumps(ctx.to_dict()), encoding="utf-8")
+                target = get_session_file_path(session_id, store_dir)
+                # Pending confirmations are never persisted to disk
+                target.write_text(json.dumps(ctx.to_dict(include_pending_confirmation=False)), encoding="utf-8")
             except Exception as e:
                 logger.debug("Failed persisting session context '%s': %s", session_id, e)
 
     def get_or_create(self, session_id: str = "default") -> SessionContext:
         """Retrieve existing session context or initialize a new isolated session."""
+        validate_session_id(session_id)
         with self._lock:
             self._prune_expired()
             if session_id not in self._sessions:
@@ -92,16 +161,17 @@ class ContextManager:
 
     def get_session(self, session_id: str = "default") -> Optional[SessionContext]:
         """Retrieve existing session context if present."""
+        if not is_valid_session_id(session_id):
+            return None
         with self._lock:
             return self._sessions.get(session_id) or self._load_session_from_disk(session_id)
 
     def reset(self, session_id: str = "default") -> SessionContext:
         """Reset conversation context for a specific session."""
+        validate_session_id(session_id)
         with self._lock:
             try:
-                from pathlib import Path
-                clean_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
-                target = Path("/tmp/riata_sessions") / f"{clean_id}.json"
+                target = get_session_file_path(session_id, self._storage_dir)
                 if target.exists():
                     target.unlink()
             except Exception:
@@ -122,10 +192,13 @@ class ContextManager:
         intent: Intent,
         action_label: str = "",
         ttl: Optional[float] = None,
+        plan_id: Optional[str] = None,
     ) -> PendingConfirmation:
         """
         Create a cryptographically distinct, session-bound pending confirmation token.
+        Bound to session, intent, entities fingerprint, and optional plan.
         """
+        validate_session_id(session_id)
         with self._lock:
             ctx = self.get_or_create(session_id)
             cfg = get_config()
@@ -144,6 +217,7 @@ class ContextManager:
                 created_at=now,
                 expires_at=expires_at,
                 status="PENDING",
+                plan_id=plan_id,
             )
             ctx.pending_confirmation = pending
             logger.info(
@@ -157,6 +231,8 @@ class ContextManager:
 
     def get_pending_confirmation(self, session_id: str) -> Optional[PendingConfirmation]:
         """Retrieve active pending confirmation if still valid and unexpired."""
+        if not is_valid_session_id(session_id):
+            return None
         with self._lock:
             ctx = self._sessions.get(session_id)
             if not ctx or not ctx.pending_confirmation:
@@ -170,12 +246,16 @@ class ContextManager:
         self,
         session_id: str,
         confirmation_id: Optional[str] = None,
+        expected_intent_name: Optional[str] = None,
+        expected_entities: Optional[dict[str, Any]] = None,
     ) -> Optional[Intent]:
         """
         Consume and invalidate pending confirmation, returning the confirmed Intent.
-
         Ensures non-replayability: once consumed, it cannot be reused.
+        Verifies intent and entity fingerprint matching when provided.
         """
+        if not is_valid_session_id(session_id):
+            return None
         with self._lock:
             ctx = self._sessions.get(session_id)
             if not ctx or not ctx.pending_confirmation:
@@ -191,6 +271,22 @@ class ContextManager:
                     "Confirmation ID mismatch: expected %s, got %s",
                     conf.confirmation_id,
                     confirmation_id,
+                )
+                return None
+
+            if expected_intent_name and conf.action != expected_intent_name:
+                logger.warning(
+                    "Confirmation action mismatch: expected %s, got %s",
+                    conf.action,
+                    expected_intent_name,
+                )
+                return None
+
+            if expected_entities is not None and conf.entities != expected_entities:
+                logger.warning(
+                    "Confirmation entity fingerprint mismatch: expected %s, got %s",
+                    conf.entities,
+                    expected_entities,
                 )
                 return None
 

@@ -6,9 +6,9 @@ Welcome, and thank you for your interest in contributing to **R.I.A.T.A**!
 
 ---
 
-## 🎯 Contribution Principles for v0.1.1
+## 🎯 Contribution Principles for v0.2.0
 
-1. **Stability Over Expansion:** Version 0.1.1 is focused on stabilization, security hardening, testing, and clean architecture.
+1. **Stability Over Expansion:** Version 0.2.0 is focused on context-aware interaction, deterministic multi-step planning, security hardening, testing, and clean architecture.
 2. **No Feature Bloat:** Please avoid submitting pull requests introducing Large Language Models (LLMs), autonomous agents, cloud assistants, or large external dependencies.
 3. **Deterministic & Safe:** All contributions must preserve the deterministic nature and strict zero-shell execution security model of R.I.A.T.A.
 

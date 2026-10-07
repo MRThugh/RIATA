@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.1   | :white_check_mark: |
-| < 0.1.1 | :x:                |
+| 0.2.0   | :white_check_mark: |
+| < 0.2.0 | :x:                |
 
 ---
 
@@ -21,7 +21,7 @@ R.I.A.T.A is designed as a **strictly bounded desktop assistant**, not an unrest
 5. **Local Web Companion Boundary**:
    - The web development companion is strictly bound to local loopback (`127.0.0.1:3000`) and is never exposed to external network interfaces.
    - Socket connection validation rejects non-loopback remote IPs.
-   - Enforces `Sec-Fetch-Site` restrictions, Host loopback matching, Origin validation, and the bundled companion client identifier header (`X-RIATA-Client: web-v0.1.1`).
+   - Enforces `Sec-Fetch-Site` restrictions, Host loopback matching, Origin validation, and the bundled companion client identifier header (`X-RIATA-Client: web-v0.2.0`).
    - Subprocess executions have a strict 15-second timeout and 16KB payload limit.
 6. **Language Pack Trust Model**: Language pack `rules.py` files execute arbitrary Python. Users must only install language packs from trusted sources.
 

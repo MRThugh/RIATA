@@ -1,5 +1,5 @@
 """
-Desktop capabilities package for R.I.A.T.A v0.1.1
+Desktop capabilities package for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 """
 

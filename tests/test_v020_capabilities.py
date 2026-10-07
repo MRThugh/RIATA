@@ -157,3 +157,58 @@ def test_filesystem_capability_blocks_disallowed_paths():
     res = cap.execute(intent_bad)
     assert res.success is False
     assert res.status == STATUS_PATH_NOT_ALLOWED
+
+
+def test_all_capabilities_adhere_to_standard_contract():
+    """Verify all 8 capabilities implement BaseCapability contract and metadata."""
+    from app.capabilities.clipboard import ClipboardCapability
+    from app.capabilities.media import MediaCapability
+    from app.capabilities.notifications import NotificationsCapability
+    from app.capabilities.processes import ProcessesCapability
+    from app.capabilities.system import SystemCapability
+    from app.capabilities.windows import WindowsCapability
+    from app.executor.result import STATUS_NOT_SUPPORTED
+
+    caps = [
+        ApplicationsCapability(),
+        FilesystemCapability(),
+        MediaCapability(),
+        SystemCapability(),
+        ProcessesCapability(),
+        WindowsCapability(),
+        NotificationsCapability(),
+        ClipboardCapability(),
+    ]
+
+    for cap in caps:
+        meta = cap.metadata()
+        assert "id" in meta and meta["id"]
+        assert "name" in meta and meta["name"]
+        assert "supported_intents" in meta and len(meta["supported_intents"]) > 0
+
+        # Test describe on first supported intent
+        first_intent = Intent(name=cap.supported_intents[0], confidence=1.0)
+        desc = cap.describe(first_intent)
+        assert len(desc) > 0
+        assert cap.can_handle(first_intent) is True
+
+        # Unsupported intent
+        unsupported = Intent(name="TOTALLY_UNSUPPORTED_ACTION_XYZ", confidence=1.0)
+        assert cap.can_handle(unsupported) is False
+        valid, err = cap.validate(unsupported)
+        assert valid is False
+
+    # Verify stub foundation capabilities return STATUS_NOT_SUPPORTED
+    foundation_caps = [
+        ProcessesCapability(),
+        WindowsCapability(),
+        NotificationsCapability(),
+        ClipboardCapability(),
+    ]
+    for f_cap in foundation_caps:
+        intent = Intent(name=f_cap.supported_intents[0], confidence=1.0)
+        res = f_cap.execute(intent)
+        assert res.success is False
+        assert res.executed is False
+        assert res.status == STATUS_NOT_SUPPORTED
+
