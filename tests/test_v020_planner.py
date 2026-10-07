@@ -147,6 +147,9 @@ def test_multi_step_plan_pauses_for_confirmation_and_resumes_cleanly():
         assert out1.plan.steps[0].status == "SUCCESS"
         # Step 2 paused for confirmation
         assert out1.plan.steps[1].status == "PENDING"
+        assert out1.plan.status == "WAITING_CONFIRMATION"
+        assert out1.result.status == STATUS_NEEDS_CONFIRMATION
+        assert out1.result.executed is False
         assert "تأیید" in out1.response_text or "temp_notes.txt" in out1.response_text
 
         ctx_manager = get_context_manager()
@@ -166,6 +169,65 @@ def test_multi_step_plan_pauses_for_confirmation_and_resumes_cleanly():
         # Turn 3: User says "بله" again -> confirmation cannot be replayed!
         out3 = router.process("بله", session_id=session_id)
         assert out3.intent.name != "DELETE_FILE"
+    finally:
+        config.dry_run = orig_dry_run
+
+
+def test_multi_step_plan_reports_waiting_confirmation_status():
+    """Section 5 regression: Plan waiting for confirmation must report WAITING_CONFIRMATION and result NEEDS_CONFIRMATION."""
+    from app.executor.result import STATUS_NEEDS_CONFIRMATION, STATUS_SUCCESS
+
+    config = get_config()
+    orig_dry_run = config.dry_run
+    config.dry_run = True
+
+    try:
+        router = get_intent_router()
+        router.reset_context()
+        session_id = "test-waiting-conf-regression"
+
+        out1 = router.process("Firefox رو باز کن و فایل temp_notes.txt رو حذف کن", session_id=session_id)
+        assert out1.plan is not None
+        assert out1.plan.steps[0].status == "SUCCESS"
+        assert out1.plan.steps[1].status == "PENDING"
+        assert out1.plan.status == "WAITING_CONFIRMATION"
+        assert out1.result.status == STATUS_NEEDS_CONFIRMATION
+        assert out1.result.executed is False
+
+        out2 = router.process("بله", session_id=session_id)
+        assert out2.plan.steps[1].status == "SUCCESS"
+        assert out2.plan.status == "SUCCESS"
+        assert out2.result.status == STATUS_SUCCESS
+    finally:
+        config.dry_run = orig_dry_run
+
+
+def test_multi_step_plan_resume_dependency_check_failure():
+    """Section 20 regression: If a dependency is no longer SUCCESS upon resume, confirmed step must not execute."""
+    from app.executor.result import STATUS_FAILED
+
+    config = get_config()
+    orig_dry_run = config.dry_run
+    config.dry_run = True
+
+    try:
+        router = get_intent_router()
+        router.reset_context()
+        session_id = "test-resume-dep-failure"
+
+        # Step 1: Open Firefox, Step 2: Delete file (requires confirmation)
+        out1 = router.process("Firefox رو باز کن و فایل temp_dep.txt رو حذف کن", session_id=session_id)
+        assert out1.plan.status == "WAITING_CONFIRMATION"
+
+        # Simulate dependency corruption (e.g. step 0 state was compromised before resume)
+        out1.plan.steps[0].status = "FAILED"
+
+        # User confirms, but dependency check on resume must fail
+        out2 = router.process("بله", session_id=session_id)
+        assert out2.plan.steps[1].status in ("BLOCKED", "SKIPPED")
+        assert out2.result.executed is False
+        assert out2.result.status == STATUS_FAILED
+        assert "Prerequisite step was not successful" in out2.response_text
     finally:
         config.dry_run = orig_dry_run
 

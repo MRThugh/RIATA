@@ -5,11 +5,14 @@ Author: Ali Kamrani (MRThugh)
 Defines standardized contract and self-describing metadata for desktop capabilities.
 """
 
-from abc import ABC, abstractmethod
-from typing import Any, Optional
+from __future__ import annotations
 
-from app.engine.intent import Intent
-from app.executor.result import ExecutionResult
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from app.engine.intent import Intent
+    from app.executor.result import ExecutionResult
 
 
 class BaseCapability(ABC):

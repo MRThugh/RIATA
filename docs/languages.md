@@ -43,7 +43,7 @@ languages/
   "native_name": "Deutsch",
   "english_name": "German",
   "direction": "ltr",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "script_pattern": "[äöüÄÖÜß]"
 }
 ```

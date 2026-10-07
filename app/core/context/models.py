@@ -14,8 +14,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from app.engine.intent import Intent
-from app.executor.result import ExecutionResult
+if TYPE_CHECKING:
+    from app.engine.intent import Intent
+    from app.executor.result import ExecutionResult
 
 
 @dataclass
@@ -80,6 +81,8 @@ class PendingConfirmation:
     def from_dict(cls, data: dict[str, Any]) -> Optional[PendingConfirmation]:
         if not data:
             return None
+        from app.engine.intent import Intent
+
         if data.get("intent") and isinstance(data["intent"], dict):
             intent = Intent.from_dict(data["intent"])
         else:
@@ -255,6 +258,9 @@ class SessionContext:
         Reconstruct SessionContext from dictionary.
         By default, pending confirmations and plans are invalidated across disk restoration.
         """
+        from app.engine.intent import Intent
+        from app.executor.result import ExecutionResult
+
         prev_intent = None
         if data.get("previous_intent"):
             if isinstance(data["previous_intent"], dict):

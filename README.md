@@ -12,7 +12,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-brightgreen.svg)
 ![GUI](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52.svg)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%20Linux-E95420.svg)
-![Tests](https://img.shields.io/badge/tests-108%20passed-green.svg)
+![Tests](https://img.shields.io/badge/tests-127%20passed-green.svg)
 ![Release](https://img.shields.io/badge/release-v0.2.0%20(Context--Aware)-orange.svg)
 
 ---
@@ -185,7 +185,7 @@ python main.py
   - Multi-Step Plan visualizer with step statuses and dependency tracking.
   - Interactive one-click Confirmation Action Bar (`بله` / `خیر`).
   - Interactive Disambiguation selection buttons.
-  - In-browser live execution of all **108 automated unit tests**.
+  - In-browser live execution of the full automated test suite (**128 tests** across 23 test modules).
 
 To launch:
 ```bash
@@ -196,7 +196,7 @@ npm run dev
 
 ## 🧪 Testing
 
-The test suite contains **108 automated unit and regression tests** across 17 test modules:
+The test suite contains **128 automated unit and regression tests** (127 passed, 1 skipped) across 23 test modules:
 
 ```bash
 # Run pytest directly

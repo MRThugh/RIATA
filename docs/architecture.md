@@ -29,16 +29,16 @@ Command Planner (Multi-Step DAG & Dependency Mapping)
 Policy Engine (Risk Evaluation: ALLOW, CONFIRM, DENY)
        │
        ▼
-Capability Registry (Modular Capability Routing)
+Capability Registry (Validation Contracts)
        │
        ▼
-Desktop Capability Provider (Applications, Filesystem, Media, System)
+Capability Execution (Direct process invocation — zero shell=True)
        │
        ▼
-Safe Executor (Direct process invocation — zero shell=True)
+Execution Result & Response Engine (Honest Reporting & Natural Feedback)
        │
        ▼
-Operating System (Ubuntu Linux Desktop)
+Context Update (Turns & Established Facts Recorded)
 ```
 
 ### Core Invariants:
@@ -114,7 +114,7 @@ RIATA/
 ├── src/                       # React Web Companion frontend
 │   ├── App.tsx                # Context-aware inspector & interactive UI
 │   └── main.tsx               # Web entrypoint
-├── tests/                     # Automated test suite (108 unit tests)
+├── tests/                     # Automated test suite (127 tests across 23 modules)
 ├── docs/                      # Architectural and technical documentation
 ├── main.py                    # Main desktop application entrypoint
 ├── requirements.txt           # Runtime dependencies
@@ -143,10 +143,21 @@ The **Context Engine** (`app/core/context/`) maintains state across conversation
 
 ## 4. Command Planner & Multi-Step Execution
 
-The **Command Planner** (`app/engine/planner.py`):
-* Splits complex utterances into ordered, individual clauses based on conjunction tokens (`و`, `and`, `then`).
-* Maps step dependencies: step 2 depends on step 1 succeeding.
-* Enforces **failure isolation**: if any step fails or is denied by security policy, subsequent steps are marked `SKIPPED` and not executed.
+The **Command Planner** (`app/engine/planner.py`) is a deterministic, rule-based sequential planner (not an autonomous or speculative AI agent):
+* **Clause Splitting:** Splits complex utterances into ordered, individual clauses based on linguistic conjunction tokens (`و`, `and`, `then`).
+* **Step Dependencies:** Maps step dependencies sequentially (step `i` depends on step `i-1` reaching `SUCCESS`).
+* **Failure Isolation:** If any step fails or is blocked by security policy, subsequent steps are marked `SKIPPED` and not executed.
+* **Deterministic State Machine:**
+  - `PENDING` → `IN_PROGRESS` → `WAITING_CONFIRMATION` → `IN_PROGRESS` → `SUCCESS` (or `PARTIAL_SUCCESS` / `FAILED` / `BLOCKED` / `CANCELLED`).
+* **Multi-Step Confirmation Flow (`WAITING_CONFIRMATION`):**
+  - When a step in a multi-step plan requires confirmation (e.g. deleting a file), the plan transitions to `WAITING_CONFIRMATION`.
+  - The overall execution result reports `NEEDS_CONFIRMATION` with `executed=False`.
+  - Prior completed steps remain `SUCCESS`, the confirmed step is `PENDING`, and subsequent steps remain `PENDING`.
+  - The plan is never marked `SUCCESS` prematurely.
+* **Resume Lifecycle:**
+  - Upon user confirmation (`بله` / `yes`), prerequisite dependencies are re-validated before execution.
+  - If valid, the step undergoes authoritative Policy re-evaluation, Capability validation, and execution.
+  - Subsequent steps proceed through the full pipeline. If all steps complete successfully, the plan finishes as `SUCCESS`. If any later step fails, it completes as `PARTIAL_SUCCESS`. If another confirmation is requested, the plan returns to `WAITING_CONFIRMATION`.
 
 ---
 

@@ -233,3 +233,114 @@ def test_disk_session_invalidates_pending_confirmation(tmp_path):
     # Crucial security invariant: pending confirmation must NOT be restored across disk reload!
     assert loaded.pending_confirmation is None
 
+
+def test_command_api_stdin_transport_preserves_session_id():
+    """Section 6 & 7 regression: Verify /api/command passes session_id through stdin JSON to python subprocess."""
+    root_dir = Path(__file__).resolve().parent.parent
+    vite_cfg = (root_dir / "vite.config.ts").read_text(encoding="utf-8")
+
+    # Statically verify that session_id is preserved in stdin JSON write
+    assert "pyProc.stdin.write(JSON.stringify({ text, dry_run: Boolean(dry_run), session_id }))" in vite_cfg
+    assert "session_id = str(payload.get('session_id', 'web-companion'))" in vite_cfg
+    assert "output = router.process(command_text, session_id=session_id)" in vite_cfg
+
+
+def test_web_session_isolation_behavioral():
+    """Section 8 regression: Commands in session A must never leak contextual state into session B."""
+    from app.engine.router import get_intent_router
+    from app.core.config import get_config
+
+    cfg = get_config()
+    orig_dry_run = cfg.dry_run
+    cfg.dry_run = True
+
+    try:
+        router = get_intent_router()
+        router.reset_context()
+
+        session_a = "test-session-isolation-A"
+        session_b = "test-session-isolation-B"
+
+        # Session A: Open Firefox
+        out_a1 = router.process("Firefox رو باز کن", session_id=session_a)
+        assert out_a1.result.success is True
+
+        ctx_a = router.context_manager.get_session(session_a)
+        assert ctx_a.active_application == "firefox"
+
+        # Session B: Try to close 'it' without having opened anything in Session B
+        ctx_b_before = router.context_manager.get_session(session_b)
+        assert ctx_b_before is None or ctx_b_before.active_application is None
+
+        out_b1 = router.process("ببندش", session_id=session_b)
+
+        # Session B must NOT inherit Firefox from Session A!
+        ctx_b = router.context_manager.get_session(session_b)
+        assert ctx_b.active_application != "firefox"
+        # It must require clarification or fail because no app was active in session B
+        assert out_b1.intent.name != "CLOSE_APPLICATION" or out_b1.result.success is False or out_b1.result.status == "NEEDS_CLARIFICATION"
+    finally:
+        cfg.dry_run = orig_dry_run
+
+
+def test_web_companion_security_boundary_audit():
+    """Section 14, 15, 16, 17: Verify loopback-only, IPv6 parsing, and API method restrictions in vite.config.ts."""
+    root_dir = Path(__file__).resolve().parent.parent
+    vite_cfg = (root_dir / "vite.config.ts").read_text(encoding="utf-8")
+
+    # Section 15: No preview host exceptions permitted
+    assert "RIATA_ALLOW_PREVIEW_HOSTS" not in vite_cfg
+    assert ".run.app" not in vite_cfg
+    assert ".aistudio.google" not in vite_cfg
+    assert ".google.internal" not in vite_cfg
+
+    # Section 16: Proper URL parsing instead of fragile split(":")[0]
+    assert 'split(":")[0]' not in vite_cfg
+    assert "parseHostname" in vite_cfg
+
+    # Section 17: Client identifier web-v0.2.0 only
+    assert '"web-v0.2.0"' in vite_cfg
+    assert '"web-v0.1.1"' not in vite_cfg
+
+    # Section 10 & 11: /api/run-tests is POST only and gated behind RIATA_ENABLE_TEST_API
+    assert "RIATA_ENABLE_TEST_API" in vite_cfg
+    assert 'Method not allowed. Use POST.' in vite_cfg
+
+
+def test_reset_context_clears_all_pending_and_contextual_state():
+    """Section 18: Reset must clear active entities, pending confirmation, pending plan, and disk session."""
+    from app.engine.router import get_intent_router
+    from app.core.config import get_config
+
+    cfg = get_config()
+    orig_dry_run = cfg.dry_run
+    cfg.dry_run = True
+
+    try:
+        router = get_intent_router()
+        session_id = "test-reset-all-state-session"
+
+        # Create active state and pending confirmation
+        out1 = router.process("Firefox رو باز کن و فایل test_reset.txt رو حذف کن", session_id=session_id)
+        ctx = router.context_manager.get_session(session_id)
+        assert ctx is not None
+        assert ctx.pending_confirmation is not None
+        assert ctx.pending_plan is not None
+
+        # Execute reset
+        ctx.clear()
+        router.context_manager.reset(session_id)
+        router.reset_context()
+
+        # State must be completely empty
+        reset_ctx = router.context_manager.get_session(session_id)
+        assert reset_ctx.pending_confirmation is None
+        assert reset_ctx.pending_plan is None
+        assert reset_ctx.pending_step_index == 0
+        assert reset_ctx.active_application is None
+        assert reset_ctx.active_file is None
+        assert reset_ctx.active_directory is None
+    finally:
+        cfg.dry_run = orig_dry_run
+
+

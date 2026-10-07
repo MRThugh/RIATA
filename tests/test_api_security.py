@@ -107,3 +107,22 @@ def test_unknown_intent_status_in_router(router):
     assert out.result.success is False
     assert out.result.executed is False
     assert out.result.status == STATUS_INVALID_COMMAND
+
+
+def test_waiting_confirmation_and_blocked_status_constants():
+    """Verify WAITING_CONFIRMATION and BLOCKED constants are defined and unique."""
+    from app.executor.result import STATUS_WAITING_CONFIRMATION, STATUS_BLOCKED, STATUS_NEEDS_CONFIRMATION
+
+    assert STATUS_WAITING_CONFIRMATION == "WAITING_CONFIRMATION"
+    assert STATUS_BLOCKED == "BLOCKED"
+    assert STATUS_WAITING_CONFIRMATION != STATUS_NEEDS_CONFIRMATION
+
+
+def test_reset_context_intent_result(router):
+    """Verify reset context command returns honest execution result."""
+    out = router.process("فراموش کن", session_id="test-reset-intent-audit")
+    assert out.result.success is True
+    assert out.result.executed is False
+    assert out.result.status == STATUS_SUCCESS
+    assert out.intent.name == "RESET_CONTEXT"
+

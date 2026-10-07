@@ -31,7 +31,7 @@ Release v0.2.0 is a major platform evolution transforming R.I.A.T.A into a **Con
   - Multi-step plan step-by-step visualizer with real-time status indicators.
   - Interactive one-click confirmation action bar (`بله` / `خیر`).
   - Interactive disambiguation selection buttons.
-  - In-browser live execution of all 108 pytest tests.
+  - In-browser live execution of all 128 pytest tests across 23 test modules.
 
 ### Changed
 - **Pipeline Evolution**: Extended execution pipeline:
@@ -46,7 +46,7 @@ Release v0.2.0 is a major platform evolution transforming R.I.A.T.A into a **Con
 - **Filesystem Containment**: File and folder operations enforce strict canonical path resolution within user sandbox (`~`) and `/tmp`, rejecting path traversal escapes and sensitive directories (`~/.ssh`, `/etc`).
 
 ### Testing
-- Expanded test suite from 73 to **108 automated unit tests** across 17 test modules:
+- Expanded test suite from 73 to **128 automated unit tests** across 23 test modules:
   - Added `tests/test_v020_context.py`
   - Added `tests/test_v020_entity_resolution.py`
   - Added `tests/test_v020_planner.py`

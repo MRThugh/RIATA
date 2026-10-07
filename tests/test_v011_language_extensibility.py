@@ -28,11 +28,12 @@ def test_language_registry_discovery():
     fa_pack = registry.get("fa")
     assert fa_pack.code == "fa"
     assert fa_pack.direction == "rtl"
-    assert fa_pack.version == "0.1.1"
+    assert fa_pack.version == "0.2.0"
 
     en_pack = registry.get("en")
     assert en_pack.code == "en"
     assert en_pack.direction == "ltr"
+    assert en_pack.version == "0.2.0"
 
 
 def test_invalid_language_pack_error():

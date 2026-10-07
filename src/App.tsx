@@ -251,13 +251,20 @@ export function App() {
 
   const runPytest = async () => {
     setIsRunningTests(true);
-    setTestOutput("Running 'pytest -v' against full R.I.A.T.A v0.2.0 test suite (108 unit tests)...\n");
+    setTestOutput("Running 'pytest -v' against full R.I.A.T.A v0.2.0 test suite...\n");
     try {
       const res = await fetch("/api/run-tests", {
+        method: "POST",
         headers: {
+          "Content-Type": "application/json",
           "X-RIATA-Client": "web-v0.2.0",
         },
       });
+      if (res.status === 403 || res.status === 404) {
+        const data = await res.json().catch(() => ({}));
+        setTestOutput(data.error || "Test execution API is disabled in production (RIATA_ENABLE_TEST_API=false).");
+        return;
+      }
       const data = await res.json();
       setTestOutput(data.output || "Test execution completed.");
     } catch (err: any) {
@@ -372,7 +379,7 @@ export function App() {
                   activeTab === "tests" ? "bg-sky-600 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Test Suite (108)
+                Test Suite
               </button>
               <button
                 onClick={() => setActiveTab("docs")}
@@ -812,7 +819,7 @@ export function App() {
               <div>
                 <h2 className="text-lg font-bold text-sky-400">R.I.A.T.A v0.2.0 Automated Pytest Suite</h2>
                 <p className="text-xs text-slate-400">
-                  108 automated unit tests covering Context Engine, Entity Resolution, Command Planner, Policy Engine, Capabilities, and Security Regressions.
+                  Automated unit and regression tests covering Context Engine, Entity Resolution, Command Planner, Policy Engine, Capabilities, and Security Boundaries.
                 </p>
               </div>
               <button
@@ -821,12 +828,12 @@ export function App() {
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition"
               >
                 <Play className="w-4 h-4" />
-                {isRunningTests ? "Running Tests..." : "Run All 108 Tests (pytest -v)"}
+                {isRunningTests ? "Running Tests..." : "Run All Tests (pytest -v)"}
               </button>
             </div>
 
             <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 h-[calc(100vh-14rem)] overflow-y-auto whitespace-pre">
-              {testOutput || 'Click "Run All 108 Tests" above to execute pytest live against the full v0.2.0 test suite.'}
+              {testOutput || 'Click "Run All Tests" above to execute pytest live against the full v0.2.0 test suite.'}
             </div>
           </div>
         )}

@@ -4,12 +4,12 @@ import tailwindcss from "@tailwindcss/vite";
 import { spawn } from "child_process";
 import { IncomingMessage } from "http";
 
-// Client identifier token used to distinguish requests from the bundled companion
-// Note: This is a client identification header for companion routing, not an authentication credential.
-const ALLOWED_CLIENT_IDENTIFIERS = new Set(["web-v0.1.1", "web-v0.2.0"]);
+// Client identifier header used by the companion to route requests.
+// NOTE: This header is a client identifier, NOT an authentication mechanism.
+const ALLOWED_CLIENT_IDENTIFIERS = new Set(["web-v0.2.0"]);
 
 // Strict loopback hostnames and remote IP addresses (0.0.0.0 and LAN ranges explicitly removed)
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
 const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 // Canonical session ID format validator (1 to 64 alphanumeric characters, underscores, and hyphens)
@@ -22,32 +22,31 @@ interface SecurityCheckResult {
   matchedOrigin?: string;
 }
 
-function isAllowedHostOrOrigin(target: string): boolean {
-  if (!target) return true;
-  // Exact match against loopback hostnames
-  if (LOOPBACK_HOSTNAMES.has(target)) return true;
-
-  // Cloud/preview host exceptions are disabled by default.
-  // Only permit preview hosts when explicitly opted-in via environment variable.
-  if (process.env.RIATA_ALLOW_PREVIEW_HOSTS === "true") {
-    if (
-      target.endsWith(".run.app") ||
-      target.endsWith(".aistudio.google") ||
-      target.endsWith(".google.internal")
-    ) {
-      return true;
+function parseHostname(rawHost: string): string | null {
+  if (!rawHost) return null;
+  try {
+    const parsed = new URL(`http://${rawHost}`);
+    let hostname = parsed.hostname.toLowerCase();
+    if (hostname.startsWith("[") && hostname.endsWith("]")) {
+      hostname = hostname.slice(1, -1);
     }
+    return hostname;
+  } catch {
+    return null;
   }
-  return false;
 }
 
-function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
+function isAllowedLoopbackHost(hostname: string | null): boolean {
+  if (!hostname) return false;
+  return LOOPBACK_HOSTNAMES.has(hostname);
+}
+
+function validateRequestSecurity(req: IncomingMessage, isOptions: boolean = false): SecurityCheckResult {
   const remoteIp = req.socket?.remoteAddress || "";
   // Strictly permit loopback only. Private LAN addresses (10.x, 172.x, 192.168.x, 169.254.x) are rejected.
   const isLoopback = !remoteIp || LOOPBACK_IPS.has(remoteIp);
-  const isPreviewOptIn = process.env.RIATA_ALLOW_PREVIEW_HOSTS === "true";
 
-  if (!isLoopback && !isPreviewOptIn) {
+  if (!isLoopback) {
     return {
       allowed: false,
       statusCode: 403,
@@ -55,7 +54,7 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     };
   }
 
-  const hostHeader = (req.headers["host"] || "").split(":")[0].toLowerCase();
+  const hostHeader = req.headers["host"] || "";
   const originHeader = (req.headers["origin"] as string) || "";
   const secFetchSite = (req.headers["sec-fetch-site"] as string) || "";
   const clientIdentifier = (req.headers["x-riata-client"] as string) || "";
@@ -69,8 +68,9 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     };
   }
 
-  // Validate Host header (exact loopback hostname matching)
-  if (!isAllowedHostOrOrigin(hostHeader)) {
+  // Validate Host header (exact loopback hostname matching, properly supporting IPv6 e.g. [::1]:3000)
+  const hostHostname = parseHostname(hostHeader);
+  if (!isAllowedLoopbackHost(hostHostname)) {
     return {
       allowed: false,
       statusCode: 403,
@@ -82,8 +82,11 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
   if (originHeader) {
     try {
       const parsedOrigin = new URL(originHeader);
-      const originHost = parsedOrigin.hostname.toLowerCase();
-      if (!isAllowedHostOrOrigin(originHost)) {
+      let originHost = parsedOrigin.hostname.toLowerCase();
+      if (originHost.startsWith("[") && originHost.endsWith("]")) {
+        originHost = originHost.slice(1, -1);
+      }
+      if (!isAllowedLoopbackHost(originHost)) {
         return {
           allowed: false,
           statusCode: 403,
@@ -99,7 +102,17 @@ function validateRequestSecurity(req: IncomingMessage): SecurityCheckResult {
     }
   }
 
-  // Require client identifier header from the companion
+  // For OPTIONS preflight: do not require the actual X-RIATA-Client header
+  if (isOptions) {
+    return {
+      allowed: true,
+      statusCode: 200,
+      message: "Authorized Preflight",
+      matchedOrigin: originHeader || undefined,
+    };
+  }
+
+  // Require client identifier header from the companion for actual requests
   if (!ALLOWED_CLIENT_IDENTIFIERS.has(clientIdentifier)) {
     return {
       allowed: false,
@@ -375,17 +388,18 @@ except Exception as e:
             });
 
             // Send payload safely via stdin JSON
-            pyProc.stdin.write(JSON.stringify({ text, dry_run: Boolean(dry_run) }));
+            pyProc.stdin.write(JSON.stringify({ text, dry_run: Boolean(dry_run), session_id }));
             pyProc.stdin.end();
           });
         });
 
         server.middlewares.use("/api/run-tests", (req, res) => {
-          const security = validateRequestSecurity(req);
+          const isOptions = req.method === "OPTIONS";
+          const security = validateRequestSecurity(req, isOptions);
 
           if (security.matchedOrigin) {
             res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
-            res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
             res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
           }
 
@@ -395,39 +409,100 @@ except Exception as e:
             return;
           }
 
+          if (req.method !== "POST") {
+            res.statusCode = 405;
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                success: false,
+                status: "INVALID_COMMAND",
+                message: "Method not allowed. Use POST.",
+              })
+            );
+            return;
+          }
+
           if (!security.allowed) {
             res.statusCode = security.statusCode;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: security.message }));
+            res.end(JSON.stringify({ error: security.message, status: "PERMISSION_DENIED" }));
             return;
           }
+
+          // Section 11: Explicit development-only gate (RIATA_ENABLE_TEST_API=true)
+          if (process.env.RIATA_ENABLE_TEST_API !== "true") {
+            res.statusCode = 403;
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                error: "Test execution API is disabled in production (set RIATA_ENABLE_TEST_API=true to enable).",
+                status: "FORBIDDEN",
+              })
+            );
+            return;
+          }
+
+          const TEST_TIMEOUT_MS = 60000;
+          const MAX_TEST_OUTPUT = 256 * 1024; // 256KB cap
 
           const pytestProc = spawn("pytest", ["-v"], {
             stdio: ["ignore", "pipe", "pipe"],
           });
 
           let output = "";
-          pytestProc.stdout.on("data", (d) => {
-            output += d.toString();
-          });
-          pytestProc.stderr.on("data", (d) => {
-            output += d.toString();
-          });
+          let isTruncated = false;
+          let isTimedOut = false;
+
+          const timer = setTimeout(() => {
+            isTimedOut = true;
+            pytestProc.kill("SIGKILL");
+          }, TEST_TIMEOUT_MS);
+
+          const appendOutput = (d: Buffer) => {
+            if (isTruncated) return;
+            if (output.length + d.length > MAX_TEST_OUTPUT) {
+              const remaining = MAX_TEST_OUTPUT - output.length;
+              if (remaining > 0) {
+                output += d.toString("utf-8", 0, remaining);
+              }
+              output += "\n[Output truncated at 256KB limit]";
+              isTruncated = true;
+            } else {
+              output += d.toString();
+            }
+          };
+
+          pytestProc.stdout.on("data", appendOutput);
+          pytestProc.stderr.on("data", appendOutput);
 
           pytestProc.on("close", (code) => {
+            clearTimeout(timer);
             res.setHeader("Content-Type", "application/json");
+            if (isTimedOut) {
+              res.statusCode = 504;
+              res.end(
+                JSON.stringify({
+                  output: output + "\n[Execution timed out after 60 seconds]",
+                  passed: false,
+                  status: "TIMEOUT",
+                })
+              );
+              return;
+            }
             res.end(
               JSON.stringify({
                 output,
                 passed: code === 0,
                 status: code === 0 ? "SUCCESS" : "FAILED",
+                truncated: isTruncated,
               })
             );
           });
         });
 
         server.middlewares.use("/api/reset-context", (req, res) => {
-          const security = validateRequestSecurity(req);
+          const isOptions = req.method === "OPTIONS";
+          const security = validateRequestSecurity(req, isOptions);
           if (security.matchedOrigin) {
             res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
             res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -489,6 +564,7 @@ except Exception as e:
             }
           });
           req.on("end", () => {
+            if (byteCount > MAX_BODY_SIZE) return;
             let parsedBody: any = {};
             try {
               parsedBody = JSON.parse(body || "{}");
@@ -523,7 +599,7 @@ except Exception as e:
 
             const pyScript = `
 import json, sys, re
-from app.core.context.manager import get_context_manager
+from app.engine.router import get_intent_router
 
 SESSION_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 
@@ -534,9 +610,13 @@ try:
         print(json.dumps({"success": False, "status": "INVALID_COMMAND", "message": "Invalid session_id"}))
         sys.exit(0)
 
-    cm = get_context_manager()
-    cm.reset_session(session_id)
-    print(json.dumps({"success": True, "status": "SUCCESS", "message": "Context reset successfully"}))
+    router = get_intent_router()
+    session_ctx = router.context_manager.get_session(session_id)
+    if session_ctx:
+        session_ctx.clear()
+    router.context_manager.reset(session_id)
+    router.reset_context()
+    print(json.dumps({"success": True, "status": "SUCCESS", "message": "Context reset successfully", "session_id": session_id}))
 except Exception as e:
     print(json.dumps({"success": False, "status": "FAILED", "message": str(e)}))
 `;

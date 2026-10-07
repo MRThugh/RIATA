@@ -212,3 +212,36 @@ def test_all_capabilities_adhere_to_standard_contract():
         assert res.executed is False
         assert res.status == STATUS_NOT_SUPPORTED
 
+
+def test_router_capability_validation_blocks_execution_before_execute():
+    """Section 22 regression: Router must enforce capability.validate() before calling capability.execute()."""
+    from unittest.mock import MagicMock
+    from app.engine.router import get_intent_router
+    from app.executor.result import STATUS_INVALID_COMMAND
+
+    router = get_intent_router()
+    reg = router.capabilities
+
+    # Create mock capability that fails validation
+    mock_cap = MagicMock(spec=BaseCapability)
+    mock_cap.id = "mock_strict_cap"
+    mock_cap.supported_intents = ["MOCK_STRICT_ACTION"]
+    mock_cap.validate.return_value = (False, "Input validation failed: invalid parameter structure")
+
+    reg.register(mock_cap)
+    try:
+        test_intent = Intent(name="MOCK_STRICT_ACTION", confidence=1.0, entities={"malformed": True})
+        res = router._dispatch_capability(test_intent)
+
+        # Validation failed -> execute must NEVER be invoked
+        mock_cap.validate.assert_called_once_with(test_intent)
+        mock_cap.execute.assert_not_called()
+
+        assert res.success is False
+        assert res.executed is False
+        assert res.status == STATUS_INVALID_COMMAND
+        assert "validation failed" in (res.error or "").lower()
+    finally:
+        reg.unregister("mock_strict_cap")
+
+

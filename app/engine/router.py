@@ -54,6 +54,8 @@ from app.executor.result import (
     STATUS_PARTIAL_SUCCESS,
     STATUS_PERMISSION_DENIED,
     STATUS_SUCCESS,
+    STATUS_WAITING_CONFIRMATION,
+    STATUS_BLOCKED,
     ExecutionResult,
 )
 from app.interaction.context import InteractionContext
@@ -202,11 +204,59 @@ class IntentRouter:
 
                 if confirmed_intent:
                     logger.info("Session '%s': Confirmed operation %s", session_id, confirmed_intent.name)
+
+                    # Section 20: If part of a resumed plan, verify dependencies before executing!
+                    if resumed_plan and 0 <= plan_step_idx < len(resumed_plan.steps):
+                        confirmed_step = resumed_plan.steps[plan_step_idx]
+                        if confirmed_step.dependencies:
+                            dep_blocked = False
+                            blocking_dep = None
+                            for dep in confirmed_step.dependencies:
+                                pred = (
+                                    resumed_plan.steps[dep]
+                                    if 0 <= dep < len(resumed_plan.steps)
+                                    else next((s for s in resumed_plan.steps if s.step_id == dep), None)
+                                )
+                                if not pred or pred.status != "SUCCESS":
+                                    dep_blocked = True
+                                    blocking_dep = pred
+                                    break
+                            if dep_blocked:
+                                pred_status = blocking_dep.status if blocking_dep else "UNKNOWN"
+                                confirmed_step.status = "BLOCKED" if pred_status in ("FAILED", "BLOCKED") else "SKIPPED"
+                                confirmed_step.error = f"Prerequisite step was not successful (status: {pred_status})."
+                                res = ExecutionResult(
+                                    success=False,
+                                    executed=False,
+                                    status=STATUS_FAILED,
+                                    intent_name=confirmed_intent.name,
+                                    message=confirmed_step.error,
+                                    error=confirmed_step.error,
+                                )
+                                confirmed_step.result = res
+                                session_ctx.pending_plan = None
+                                session_ctx.pending_step_index = 0
+                                resumed_plan.status = "BLOCKED" if any(s.status == "BLOCKED" for s in resumed_plan.steps) else "FAILED"
+                                self._mark_remaining_steps(resumed_plan.steps[plan_step_idx + 1:], "SKIPPED")
+                                return ProcessOutput(
+                                    response_text=confirmed_step.error,
+                                    intent=confirmed_intent,
+                                    result=res,
+                                    direction=direction,
+                                    plan=resumed_plan,
+                                    session_id=session_id,
+                                )
+
                     # Authoritative Policy re-check (Section 17): Confirmation must NEVER bypass policy!
                     policy = self.policy_engine.evaluate(confirmed_intent)
                     if confirmed_intent.is_dangerous or policy.is_denied:
                         logger.warning("Denied confirmed operation by security policy: %s", confirmed_intent.name)
+                        if resumed_plan and 0 <= plan_step_idx < len(resumed_plan.steps):
+                            resumed_plan.steps[plan_step_idx].status = "BLOCKED"
+                            self._mark_remaining_steps(resumed_plan.steps[plan_step_idx + 1:], "SKIPPED")
+                            resumed_plan.status = "BLOCKED"
                         session_ctx.pending_plan = None
+                        session_ctx.pending_step_index = 0
                         res = ExecutionResult(
                             success=False,
                             executed=False,
@@ -221,6 +271,7 @@ class IntentRouter:
                             intent=confirmed_intent,
                             result=res,
                             direction=direction,
+                            plan=resumed_plan,
                             session_id=session_id,
                         )
 
@@ -246,6 +297,13 @@ class IntentRouter:
             elif pack.is_cancellation(lowered) or lowered in ("no", "n", "نه", "خیر", "لغو", "کنسل"):
                 if pending_conf:
                     self.context_manager.reject_pending_confirmation(session_id)
+                resumed_plan = getattr(session_ctx, "pending_plan", None)
+                if resumed_plan:
+                    resumed_plan.status = "CANCELLED"
+                    plan_step_idx = getattr(session_ctx, "pending_step_index", 0)
+                    if 0 <= plan_step_idx < len(resumed_plan.steps):
+                        resumed_plan.steps[plan_step_idx].status = "CANCELLED"
+                        self._mark_remaining_steps(resumed_plan.steps[plan_step_idx + 1:], "CANCELLED")
                 session_ctx.pending_plan = None
                 session_ctx.pending_step_index = 0
                 self.interaction_context.clear()
@@ -272,6 +330,7 @@ class IntentRouter:
                     intent=cancel_intent,
                     result=res,
                     direction=direction,
+                    plan=resumed_plan,
                     session_id=session_id,
                 )
 
@@ -678,7 +737,7 @@ class IntentRouter:
 
             if policy.requires_confirmation:
                 # Multi-step command paused for confirmation (Section 18)
-                self.context_manager.set_pending_confirmation(
+                conf_token = self.context_manager.set_pending_confirmation(
                     session_id=session_id,
                     intent=intent,
                     action_label=policy.action_label,
@@ -687,14 +746,38 @@ class IntentRouter:
                 session_ctx.pending_plan = plan
                 session_ctx.pending_step_index = i
                 step.status = "PENDING"
-                conf_msg = pack.get_response(
-                    "confirm_action",
-                    default="Are you sure you want to {action}? (yes / no)",
-                    action=policy.action_label or intent.name,
-                )
+                if intent.name == "DELETE_FILE" and intent.entities.get("file"):
+                    conf_msg = pack.get_response(
+                        "confirm_delete_file",
+                        default=f"Are you sure you want to delete {intent.entities['file']}? (yes / no)",
+                        file_name=intent.entities["file"],
+                    )
+                else:
+                    conf_msg = pack.get_response(
+                        "confirm_action",
+                        default="Are you sure you want to {action}? (yes / no)",
+                        action=policy.action_label or intent.name,
+                    )
                 step_responses.append(f"⚠️ {conf_msg}")
-                # Pauses execution cleanly: remaining steps wait for user confirmation
-                break
+                plan.status = "WAITING_CONFIRMATION"
+                joined_response = "\n".join(step_responses)
+                combined_result = ExecutionResult(
+                    success=False,
+                    executed=False,
+                    status=STATUS_NEEDS_CONFIRMATION,
+                    intent_name=intent.name,
+                    message=joined_response,
+                    metadata={"confirmation_id": conf_token.confirmation_id},
+                    data={"steps_count": len(plan.steps), "plan_status": plan.status},
+                )
+                return ProcessOutput(
+                    response_text=joined_response,
+                    intent=intent,
+                    result=combined_result,
+                    direction=direction,
+                    plan=plan,
+                    session_id=session_id,
+                )
 
             # 4. Execute Capability (with contract validation)
             step_res = self._dispatch_capability(intent)
@@ -716,21 +799,32 @@ class IntentRouter:
                 self._mark_remaining_steps(plan.steps[i + 1:], "SKIPPED")
                 break
 
-        # Determine overall plan status
-        if any_success and not any_failed:
+        joined_response = "\n".join(step_responses)
+        all_success = bool(plan.steps) and all(s.status == "SUCCESS" for s in plan.steps)
+        if all_success:
             plan.status = "SUCCESS"
             overall_status = STATUS_SUCCESS
-        elif any_success and any_failed:
+            overall_success = True
+            overall_executed = True
+        elif any_success and (any_failed or any(s.status in ("SKIPPED", "BLOCKED") for s in plan.steps)):
             plan.status = "PARTIAL_SUCCESS"
             overall_status = STATUS_PARTIAL_SUCCESS
+            overall_success = True
+            overall_executed = True
+        elif any(s.status == "BLOCKED" for s in plan.steps) and not any_success:
+            plan.status = "BLOCKED"
+            overall_status = STATUS_FAILED
+            overall_success = False
+            overall_executed = False
         else:
             plan.status = "FAILED"
             overall_status = STATUS_FAILED
+            overall_success = False
+            overall_executed = False
 
-        joined_response = "\n".join(step_responses)
         combined_result = ExecutionResult(
-            success=any_success,
-            executed=any_success,
+            success=overall_success,
+            executed=overall_executed,
             status=overall_status,
             intent_name="MULTI_STEP_PLAN",
             message=joined_response,
@@ -779,10 +873,21 @@ class IntentRouter:
             self._mark_remaining_steps(plan.steps[confirmed_step_idx + 1:], "SKIPPED")
             session_ctx.pending_plan = None
             session_ctx.pending_step_index = 0
+            has_prior_success = any(s.status == "SUCCESS" for s in plan.steps[:confirmed_step_idx])
+            plan.status = "PARTIAL_SUCCESS" if has_prior_success else "FAILED"
+            res_status = STATUS_PARTIAL_SUCCESS if has_prior_success else STATUS_FAILED
+            joined_resp = "\n".join(step_responses)
             return ProcessOutput(
-                response_text="\n".join(step_responses),
+                response_text=joined_resp,
                 intent=confirmed_intent,
-                result=confirmed_result,
+                result=ExecutionResult(
+                    success=has_prior_success,
+                    executed=has_prior_success,
+                    status=res_status,
+                    intent_name="MULTI_STEP_PLAN",
+                    message=joined_resp,
+                    data={"steps_count": len(plan.steps), "plan_status": plan.status},
+                ),
                 direction=direction,
                 plan=plan,
                 session_id=session_id,
@@ -855,7 +960,7 @@ class IntentRouter:
                 break
 
             if policy.requires_confirmation:
-                self.context_manager.set_pending_confirmation(
+                next_conf_token = self.context_manager.set_pending_confirmation(
                     session_id=session_id,
                     intent=intent,
                     action_label=policy.action_label,
@@ -864,21 +969,32 @@ class IntentRouter:
                 session_ctx.pending_plan = plan
                 session_ctx.pending_step_index = i
                 step.status = "PENDING"
-                conf_msg = pack.get_response(
-                    "confirm_action",
-                    default="Are you sure you want to {action}? (yes / no)",
-                    action=policy.action_label or intent.name,
-                )
+                if intent.name == "DELETE_FILE" and intent.entities.get("file"):
+                    conf_msg = pack.get_response(
+                        "confirm_delete_file",
+                        default=f"Are you sure you want to delete {intent.entities['file']}? (yes / no)",
+                        file_name=intent.entities["file"],
+                    )
+                else:
+                    conf_msg = pack.get_response(
+                        "confirm_action",
+                        default="Are you sure you want to {action}? (yes / no)",
+                        action=policy.action_label or intent.name,
+                    )
                 step_responses.append(f"⚠️ {conf_msg}")
+                plan.status = "WAITING_CONFIRMATION"
+                joined_resp = "\n".join(step_responses)
                 return ProcessOutput(
-                    response_text="\n".join(step_responses),
+                    response_text=joined_resp,
                     intent=intent,
                     result=ExecutionResult(
-                        success=True,
+                        success=False,
                         executed=False,
                         status=STATUS_NEEDS_CONFIRMATION,
                         intent_name=intent.name,
-                        message=conf_msg,
+                        message=joined_resp,
+                        metadata={"confirmation_id": next_conf_token.confirmation_id},
+                        data={"steps_count": len(plan.steps), "plan_status": plan.status},
                     ),
                     direction=direction,
                     plan=plan,
@@ -908,15 +1024,27 @@ class IntentRouter:
         session_ctx.pending_plan = None
         session_ctx.pending_step_index = 0
 
-        if any_success and not any_failed:
+        all_success = bool(plan.steps) and all(s.status == "SUCCESS" for s in plan.steps)
+        if all_success:
             plan.status = "SUCCESS"
             overall_status = STATUS_SUCCESS
-        elif any_success and any_failed:
+            overall_success = True
+            overall_executed = True
+        elif any_success and (any_failed or any(s.status in ("SKIPPED", "BLOCKED") for s in plan.steps)):
             plan.status = "PARTIAL_SUCCESS"
             overall_status = STATUS_PARTIAL_SUCCESS
+            overall_success = True
+            overall_executed = True
+        elif any(s.status == "BLOCKED" for s in plan.steps) and not any_success:
+            plan.status = "BLOCKED"
+            overall_status = STATUS_FAILED
+            overall_success = False
+            overall_executed = False
         else:
             plan.status = "FAILED"
             overall_status = STATUS_FAILED
+            overall_success = False
+            overall_executed = False
 
         joined_response = "\n".join(step_responses)
         combined_result = ExecutionResult(

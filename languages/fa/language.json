@@ -3,7 +3,7 @@
   "name": "فارسی",
   "english_name": "Persian",
   "direction": "rtl",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "responses": {
     "greeting": "سلام! چه کاری برات انجام بدم؟",
     "clarify_application": "من دقیق متوجه نشدم. میتونی بگی کدوم برنامه رو باز کنم؟",

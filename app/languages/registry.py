@@ -1,5 +1,5 @@
 """
-Extensible Language Registry and Language Pack architecture for R.I.A.T.A v0.1.1
+Extensible Language Registry and Language Pack architecture for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 
 Follows the design principle:
@@ -37,7 +37,7 @@ class LanguagePack:
     name: str
     english_name: str
     direction: str = "ltr"  # 'rtl' or 'ltr'
-    version: str = "0.1.1"
+    version: str = "0.2.0"
     native_name: str = ""
     script_pattern: Optional[str] = None
     responses: dict[str, Any] = field(default_factory=dict)
@@ -175,7 +175,7 @@ class LanguageRegistry:
         if direction not in ("ltr", "rtl"):
             raise InvalidLanguagePackError(f"Invalid direction '{direction}' in {pack_dir}")
 
-        version = meta.get("version", "0.1.1")
+        version = meta.get("version", "0.2.0")
         script_pattern = meta.get("script_pattern")
 
         # 2. Responses (from responses.json or manifest/language.json)
@@ -288,7 +288,7 @@ class LanguageRegistry:
             name=code,
             english_name=code,
             direction="ltr",
-            version="0.1.1",
+            version="0.2.0",
         )
 
     def has(self, code: str) -> bool:

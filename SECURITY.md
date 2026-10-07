@@ -19,10 +19,12 @@ R.I.A.T.A is designed as a **strictly bounded desktop assistant**, not an unrest
 3. **Protected Directory Shield**: Access to sensitive credential directories (`~/.ssh`, `~/.gnupg`, `~/.pki`, `~/.aws`, `~/.docker`, `~/.kube`, `~/.password-store`) is blocked from generic intent actions.
 4. **Policy Engine (ALLOW, CONFIRM, DENY)**: High-risk operations (`SHUTDOWN`, `RESTART`, `DELETE_FILE`) require explicit user confirmation. Destructive commands (`rm`, `sudo`, `mkfs`, fork bombs) are unconditionally blocked.
 5. **Local Web Companion Boundary**:
-   - The web development companion is strictly bound to local loopback (`127.0.0.1:3000`) and is never exposed to external network interfaces.
-   - Socket connection validation rejects non-loopback remote IPs.
-   - Enforces `Sec-Fetch-Site` restrictions, Host loopback matching, Origin validation, and the bundled companion client identifier header (`X-RIATA-Client: web-v0.2.0`).
+   - The Web Companion is strictly loopback-only (`127.0.0.1` and `::1`). It is never exposed to external network interfaces or remote addresses.
+   - Socket connection validation unconditionally rejects all non-loopback remote IPs; private LAN addresses (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `169.254.x.x`) are not considered local clients and are rejected with HTTP 403 Forbidden.
+   - Enforces `Sec-Fetch-Site` restrictions, Host header loopback matching (supporting IPv4 and bracketed IPv6 `[::1]`), and Origin header validation.
+   - The `X-RIATA-Client` header (`web-v0.2.0`) is a companion client identifier used to distinguish browser client requests; it is **not** an authentication credential.
    - Subprocess executions have a strict 15-second timeout and 16KB payload limit.
+   - The `/api/run-tests` endpoint is strictly development-only. It is disabled by default (returning HTTP 403 Forbidden) and must be explicitly enabled via `RIATA_ENABLE_TEST_API=true`. Test executions are enforced with a 60-second process timeout and 256KB memory output bound.
 6. **Language Pack Trust Model**: Language pack `rules.py` files execute arbitrary Python. Users must only install language packs from trusted sources.
 
 ---

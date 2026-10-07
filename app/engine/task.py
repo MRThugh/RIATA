@@ -1,5 +1,5 @@
 """
-Task Composition Foundation for R.I.A.T.A v0.1.1
+Task Composition Foundation for R.I.A.T.A v0.2.0
 Author: Ali Kamrani (MRThugh)
 
 Data model and execution structures for single and composite tasks.

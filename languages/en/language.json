@@ -3,7 +3,7 @@
   "name": "English",
   "english_name": "English",
   "direction": "ltr",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "responses": {
     "greeting": "Hello! How can I help you today?",
     "clarify_application": "I didn't catch that clearly. Could you specify which application to open?",

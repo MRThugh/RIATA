@@ -62,7 +62,7 @@ class CommandPlan:
     steps: list[CommandStep] = field(default_factory=list)
     context_snapshot: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
-    status: str = "PENDING"  # PENDING, IN_PROGRESS, SUCCESS, PARTIAL_SUCCESS, FAILED, BLOCKED, CANCELLED
+    status: str = "PENDING"  # PENDING, IN_PROGRESS, WAITING_CONFIRMATION, SUCCESS, PARTIAL_SUCCESS, FAILED, BLOCKED, CANCELLED
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -70,17 +70,21 @@ class CommandPlan:
         return len(self.steps) == 1
 
     @property
+    def is_waiting_confirmation(self) -> bool:
+        return self.status == "WAITING_CONFIRMATION"
+
+    @property
     def all_succeeded(self) -> bool:
         return bool(self.steps) and all(s.status == "SUCCESS" for s in self.steps)
 
     @property
     def has_failure(self) -> bool:
-        return any(s.status == "FAILED" for s in self.steps)
+        return any(s.status in ("FAILED", "BLOCKED") for s in self.steps)
 
     @property
     def has_partial_success(self) -> bool:
         success_count = sum(1 for s in self.steps if s.status == "SUCCESS")
-        return success_count > 0 and (self.has_failure or any(s.status == "SKIPPED" for s in self.steps))
+        return success_count > 0 and (self.has_failure or any(s.status in ("SKIPPED", "CANCELLED") for s in self.steps))
 
     def to_dict(self) -> dict[str, Any]:
         return {
