@@ -1,6 +1,10 @@
 """
-Entity extraction module for R.I.A.T.A v0.1.0
+Entity extraction module for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
+
+Architecture:
+Language-agnostic entity extractor consuming declarative Language Packs.
+Core does not contain language-specific if/elif branching.
 """
 
 import re
@@ -11,139 +15,121 @@ from app.core.constants import (
     INTENT_OPEN_FILE,
     INTENT_OPEN_FOLDER,
     INTENT_PLAY_MUSIC,
-    LANG_ENGLISH,
-    LANG_PERSIAN,
 )
+from app.languages.registry import LanguagePack, get_language_registry
 from app.registry.applications import get_application_registry
 
-# Standard XDG folder mappings (both Persian and English)
-FOLDER_CANONICAL_MAP: dict[str, str] = {
-    # Persian
-    "دانلود": "Downloads",
-    "دانلودها": "Downloads",
-    "دانلود": "Downloads",
-    "اسناد": "Documents",
-    "داکیومنت": "Documents",
-    "داکیومنتس": "Documents",
-    "مدارک": "Documents",
-    "تصاویر": "Pictures",
-    "تصویر": "Pictures",
-    "عکس": "Pictures",
-    "عکسها": "Pictures",
-    "عکس ها": "Pictures",
-    "پیکچرز": "Pictures",
-    "موزیک": "Music",
-    "اهنگ": "Music",
-    "اهنگها": "Music",
-    "موسیقی": "Music",
-    "موزیک ها": "Music",
-    "ویدیو": "Videos",
-    "ویدیوها": "Videos",
-    "ویدیو ها": "Videos",
-    "فیلم": "Videos",
-    "فیلمها": "Videos",
-    "فیلم ها": "Videos",
-    "دسکتاپ": "Desktop",
-    "میزکار": "Desktop",
-    "میز کار": "Desktop",
-    "خانه": "Home",
-    "پوشه خانگی": "Home",
-    "اصلی": "Home",
-    # English
-    "downloads": "Downloads",
-    "download": "Downloads",
-    "documents": "Documents",
-    "document": "Documents",
-    "docs": "Documents",
-    "pictures": "Pictures",
-    "picture": "Pictures",
-    "photos": "Pictures",
-    "images": "Pictures",
-    "music": "Music",
-    "songs": "Music",
-    "audio": "Music",
-    "videos": "Videos",
-    "video": "Videos",
-    "movies": "Videos",
-    "desktop": "Desktop",
-    "home": "Home",
-}
+
+class _CombinedFolderMap(dict):
+    """Dynamic dict view combining canonical folder maps from all registered packs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        try:
+            reg = get_language_registry()
+            for code in reg.get_supported_codes():
+                pack = reg.get(code)
+                self.update(pack.get_folder_map())
+        except Exception:
+            pass
+
+    def __getitem__(self, key: str) -> str:
+        self._refresh()
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._refresh()
+        return super().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        self._refresh()
+        return super().__contains__(key)
+
+    def items(self):
+        self._refresh()
+        return super().items()
+
+
+# Backward-compatible global folder mapping dynamically populated from language packs
+FOLDER_CANONICAL_MAP = _CombinedFolderMap()
 
 
 class EntityExtractor:
-    """Extracts and normalizes domain entities from user input."""
+    """Extracts and normalizes domain entities from user input using Language Packs."""
 
     def __init__(self) -> None:
-        self.registry = get_application_registry()
+        self.app_registry = get_application_registry()
+        self.lang_registry = get_language_registry()
 
     def extract(
         self, intent_name: str, normalized_text: str, language: str, raw_text: str = ""
     ) -> dict[str, Any]:
-        """Extract entities relevant to the identified intent."""
+        """Extract entities relevant to the identified intent using the language pack."""
+        pack = self.lang_registry.get(language)
+
+        # 1. Custom rule hook if pack provides one
+        if pack.rules:
+            custom_entities = pack.rules.extract_entities(intent_name, normalized_text, raw_text)
+            if custom_entities is not None:
+                return custom_entities
+
+        # 2. Declarative extraction
         entities: dict[str, Any] = {}
 
         if intent_name == INTENT_OPEN_APPLICATION:
-            app_entity = self._extract_application(normalized_text, language, raw_text)
+            app_entity = self._extract_application(normalized_text, pack, raw_text)
             if app_entity:
                 entities["application"] = app_entity
 
         elif intent_name == INTENT_OPEN_FOLDER:
-            folder_entity = self._extract_folder(normalized_text, language)
+            folder_entity = self._extract_folder(normalized_text, pack)
             if folder_entity:
                 entities["folder"] = folder_entity
 
         elif intent_name == INTENT_PLAY_MUSIC:
-            song_entity = self._extract_song(normalized_text, language, raw_text)
+            song_entity = self._extract_song(normalized_text, pack, raw_text)
             if song_entity:
                 entities["song"] = song_entity
 
         elif intent_name == INTENT_OPEN_FILE:
-            file_entity = self._extract_file(normalized_text, language)
+            file_entity = self._extract_file(normalized_text, pack)
             if file_entity:
                 entities["file"] = file_entity
 
         return entities
 
     def _extract_application(
-        self, text: str, language: str, raw_text: str
+        self, text: str, pack: LanguagePack, raw_text: str
     ) -> Optional[str]:
-        """Extract target application name."""
+        """Extract target application name using pack declarative patterns."""
         cleaned = text.strip()
 
-        # Check raw text for exact casing (e.g. "Firefox", "VS Code")
-        # In Persian: "فایرفاکس رو باز کن" or "Firefox رو باز کن"
-        if language == LANG_PERSIAN:
-            # Match patterns like "<app> رو باز کن", "<app> را باز کن", "<app> باز کن", "برنامه <app> رو باز کن"
-            patterns = [
-                r"^(?:برنامه\s+)?(.+?)\s+(?:رو|را|رو\s+هم|را\s+هم)\s+(?:باز\s*کن|اجرا\s*کن|استارت\s*بزن|استارت\s*کن)$",
-                r"^(?:برنامه\s+)?(.+?)\s+(?:باز\s*کن|اجرا\s*کن|استارت\s*بزن)$",
-                r"^(?:باز\s*کن|اجرا\s*کن)\s+(?:برنامه\s+)?(.+?)$",
-            ]
-            for pat in patterns:
-                m = re.match(pat, cleaned)
-                if m:
-                    extracted = m.group(1).strip()
-                    # Strip residual markers
-                    extracted = re.sub(r"^(?:برنامه|اپلیکیشن)\s+", "", extracted).strip()
-                    extracted = re.sub(r"\s+(?:رو|را)$", "", extracted).strip()
-                    if extracted:
-                        return self._resolve_app_entity(extracted, raw_text)
+        patterns = pack.entities.get("application_patterns", [])
+        prefixes = pack.entities.get("application_prefixes_to_strip", [])
+        suffixes = pack.entities.get("application_suffixes_to_strip", [])
 
-        elif language == LANG_ENGLISH:
-            # Match "open <app>", "launch <app>", "start <app>", "run <app>"
-            patterns = [
-                r"^(?:open|launch|start|run)\s+(?:app\s+|application\s+)?(.+?)$",
-                r"^(?:open|launch|start|run)\s+(.+?)\s+(?:app|application)$",
-            ]
-            for pat in patterns:
-                m = re.match(pat, cleaned)
-                if m:
-                    extracted = m.group(1).strip()
+        for pat in patterns:
+            m = re.match(pat, cleaned, flags=re.IGNORECASE)
+            if m:
+                # Extract named group 'app' or first group
+                extracted = m.groupdict().get("app") if "app" in m.groupdict() else m.group(1)
+                if extracted:
+                    extracted = extracted.strip()
+                    # Strip prefixes
+                    for pref in prefixes:
+                        extracted = re.sub(rf"^{re.escape(pref)}\s+", "", extracted, flags=re.IGNORECASE).strip()
+                    # Strip suffixes
+                    for suff in suffixes:
+                        extracted = re.sub(rf"\s+{re.escape(suff)}$", "", extracted, flags=re.IGNORECASE).strip()
+
                     if extracted:
                         return self._resolve_app_entity(extracted, raw_text)
 
         # Fallback: check if any registered application name or alias is contained in the text
-        for alias, app_id in self.registry._alias_map.items():
+        for alias, app_id in self.app_registry._alias_map.items():
             if re.search(rf"\b{re.escape(alias)}\b", cleaned, flags=re.IGNORECASE):
                 return app_id
 
@@ -151,7 +137,7 @@ class EntityExtractor:
 
     def _resolve_app_entity(self, extracted: str, raw_text: str) -> str:
         """Resolve extracted string against application registry or preserved casing."""
-        app_entry = self.registry.find(extracted)
+        app_entry = self.app_registry.find(extracted)
         if app_entry:
             return app_entry.id
 
@@ -162,62 +148,43 @@ class EntityExtractor:
 
         return extracted
 
-    def _extract_folder(self, text: str, language: str) -> Optional[str]:
-        """Extract canonical folder name from text."""
+    def _extract_folder(self, text: str, pack: LanguagePack) -> Optional[str]:
+        """Extract canonical folder name from text using pack definitions and combined map."""
         cleaned = text.strip()
 
-        # Check known canonical folders first
+        # Check combined folder map (allows e.g. "Downloads" mentioned in Persian commands)
         for key, canonical in FOLDER_CANONICAL_MAP.items():
-            # Check standalone word or preceded by "پوشه" / "folder"
             pat = rf"(?:^|\s)(?:پوشه\s+|فولدر\s+|folder\s+)?{re.escape(key)}(?:\s|$)"
             if re.search(pat, cleaned, flags=re.IGNORECASE):
                 return canonical
 
-        # Generic pattern match: "پوشه <folder> رو باز کن" or "open <folder> folder"
-        if language == LANG_PERSIAN:
-            m = re.match(r"^(?:پوشه|فولدر)\s+(.+?)(?:\s+رو)?(?:\s+باز\s*کن|\s+نشون\s*بده)?$", cleaned)
+        # Generic pattern match from pack
+        patterns = pack.entities.get("folder_patterns", [])
+        for pat in patterns:
+            m = re.match(pat, cleaned, flags=re.IGNORECASE)
             if m:
-                target = m.group(1).strip()
-                return FOLDER_CANONICAL_MAP.get(target, target.capitalize())
-        else:
-            m = re.match(r"^(?:open|show|explore)\s+(?:folder\s+)?(.+?)(?:\s+folder)?$", cleaned)
-            if m:
-                target = m.group(1).strip()
-                return FOLDER_CANONICAL_MAP.get(target, target.capitalize())
+                target = m.groupdict().get("folder") if "folder" in m.groupdict() else m.group(1)
+                if target:
+                    target = target.strip()
+                    return FOLDER_CANONICAL_MAP.get(target, target.capitalize())
 
         return None
 
     def _extract_song(
-        self, text: str, language: str, raw_text: str
+        self, text: str, pack: LanguagePack, raw_text: str
     ) -> Optional[str]:
         """Extract song title or null if user just requested generic playback."""
         cleaned = text.strip()
+        patterns = pack.entities.get("song_patterns", [])
+        ignore_words = pack.entities.get("song_ignore_words", [])
 
-        # Persian: "آهنگ Another Love رو پخش کن" or "موزیک Another Love پخش کن"
-        if language == LANG_PERSIAN:
-            patterns = [
-                r"^(?:اهنگ|موزیک|موسیقی)\s+(.+?)\s+(?:رو\s+)?(?:پخش\s*کن|پلی\s*کن|بذار)$",
-                r"^پخش\s+(?:اهنگ|موزیک)\s+(.+)$",
-            ]
-            for pat in patterns:
-                m = re.match(pat, cleaned)
-                if m:
-                    extracted = m.group(1).strip()
-                    # Exclude generic words like "یه" or "یک"
-                    if extracted in ("یه", "یک", "رو", "را"):
-                        return None
-                    return self._preserve_song_case(extracted, raw_text)
-
-        elif language == LANG_ENGLISH:
-            # English: "play Another Love", "play song Another Love"
-            patterns = [
-                r"^play\s+(?:song\s+|track\s+)?(.+)$",
-            ]
-            for pat in patterns:
-                m = re.match(pat, cleaned)
-                if m:
-                    extracted = m.group(1).strip()
-                    if extracted in ("music", "a song", "song", "some music"):
+        for pat in patterns:
+            m = re.match(pat, cleaned, flags=re.IGNORECASE)
+            if m:
+                extracted = m.groupdict().get("song") if "song" in m.groupdict() else m.group(1)
+                if extracted:
+                    extracted = extracted.strip()
+                    if extracted in ignore_words or extracted.lower() in [w.lower() for w in ignore_words]:
                         return None
                     return self._preserve_song_case(extracted, raw_text)
 
@@ -230,17 +197,18 @@ class EntityExtractor:
             return m.group(0).strip()
         return extracted.title()
 
-    def _extract_file(self, text: str, language: str) -> Optional[str]:
+    def _extract_file(self, text: str, pack: LanguagePack) -> Optional[str]:
         """Extract target file path or name."""
         cleaned = text.strip()
-        if language == LANG_PERSIAN:
-            m = re.match(r"^فایل\s+(.+?)(?:\s+رو)?\s+(?:باز\s*کن|اجرا\s*کن)$", cleaned)
+        patterns = pack.entities.get("file_patterns", [])
+
+        for pat in patterns:
+            m = re.match(pat, cleaned, flags=re.IGNORECASE)
             if m:
-                return m.group(1).strip()
-        else:
-            m = re.match(r"^open\s+file\s+(.+)$", cleaned)
-            if m:
-                return m.group(1).strip()
+                extracted = m.groupdict().get("file") if "file" in m.groupdict() else m.group(1)
+                if extracted:
+                    return extracted.strip()
+
         return None
 
 

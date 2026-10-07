@@ -5,7 +5,7 @@ Author: Ali Kamrani (MRThugh)
 
 from typing import Final
 
-__version__: Final[str] = "0.1.0"
+__version__: Final[str] = "0.1.1"
 APP_NAME: Final[str] = "R.I.A.T.A"
 APP_FULL_NAME: Final[str] = "Responsive Intent Automation & Task Assistant"
 APP_AUTHOR: Final[str] = "Ali Kamrani (MRThugh)"
@@ -25,6 +25,8 @@ INTENT_TAKE_SCREENSHOT: Final[str] = "TAKE_SCREENSHOT"
 INTENT_EXIT_APPLICATION: Final[str] = "EXIT_APPLICATION"
 INTENT_UNKNOWN: Final[str] = "UNKNOWN"
 INTENT_CLARIFY: Final[str] = "CLARIFY"
+INTENT_CONFIRM: Final[str] = "CONFIRM"
+INTENT_CANCEL: Final[str] = "CANCEL"
 
 ALL_INTENTS: Final[tuple[str, ...]] = (
     INTENT_OPEN_APPLICATION,
@@ -39,6 +41,8 @@ ALL_INTENTS: Final[tuple[str, ...]] = (
     INTENT_EXIT_APPLICATION,
     INTENT_UNKNOWN,
     INTENT_CLARIFY,
+    INTENT_CONFIRM,
+    INTENT_CANCEL,
 )
 
 # Confidence thresholds

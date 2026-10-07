@@ -1,6 +1,10 @@
 """
-Rule-based Intent Parser and Matcher for R.I.A.T.A v0.1.0
+Rule-based Intent Parser and Matcher for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
+
+Architecture:
+Language-independent Intent Parser driven by Language Packs.
+Outputs language-independent Intent structures.
 """
 
 import re
@@ -10,7 +14,6 @@ from typing import Any, Optional
 from app.core.constants import (
     CONFIDENCE_EXACT,
     CONFIDENCE_HIGH,
-    CONFIDENCE_LOW,
     CONFIDENCE_MEDIUM,
     DANGEROUS_COMMANDS,
     INTENT_CLARIFY,
@@ -26,22 +29,20 @@ from app.core.constants import (
     INTENT_TAKE_SCREENSHOT,
     INTENT_UNKNOWN,
     LANG_AUTO,
-    LANG_ENGLISH,
-    LANG_PERSIAN,
 )
 from app.core.logger import get_logger
 from app.engine.entity_extractor import FOLDER_CANONICAL_MAP, get_entity_extractor
 from app.engine.intent import Intent
 from app.engine.normalizer import get_normalizer
 from app.languages.detector import detect_language
-from app.languages.loader import get_language_loader
+from app.languages.registry import LanguagePack, get_language_registry
 from app.registry.applications import get_application_registry
 
 logger = get_logger("riata.matcher")
 
 
 class BaseIntentParser(ABC):
-    """Abstract interface for intent parsing (ensures future AI compatibility)."""
+    """Abstract interface for intent parsing."""
 
     @abstractmethod
     def parse(self, text: str, context: Optional[dict[str, Any]] = None) -> Intent:
@@ -51,17 +52,17 @@ class BaseIntentParser(ABC):
 
 class RuleBasedIntentParser(BaseIntentParser):
     """
-    Deterministic, extensible, rule-based Intent Engine for R.I.A.T.A v0.1.0.
+    Deterministic, extensible, rule-based Intent Engine for R.I.A.T.A v0.1.1.
 
     Separates language understanding from action execution.
     Outputs language-independent Intent structures.
     """
 
     def __init__(self) -> None:
-        self.loader = get_language_loader()
+        self.registry = get_language_registry()
         self.normalizer = get_normalizer()
         self.extractor = get_entity_extractor()
-        self.registry = get_application_registry()
+        self.app_registry = get_application_registry()
 
     def parse(self, text: str, context: Optional[dict[str, Any]] = None) -> Intent:
         """Parse user input into structured Intent."""
@@ -69,7 +70,7 @@ class RuleBasedIntentParser(BaseIntentParser):
         if not raw_text:
             return Intent.unknown(raw_text)
 
-        # 1. Safety check for dangerous or malicious commands
+        # 1. Safety check for dangerous or malicious shell commands
         if self._is_dangerous(raw_text):
             logger.warning("Dangerous command detected and blocked: %s", raw_text)
             return Intent(
@@ -77,32 +78,32 @@ class RuleBasedIntentParser(BaseIntentParser):
                 confidence=0.0,
                 raw_text=raw_text,
                 normalized_text=raw_text,
-                language=LANG_ENGLISH,
+                language="en",
                 is_dangerous=True,
             )
 
-        # 2. Contextual follow-up check (e.g. user selecting option 1, 2 or answering a question)
+        # 2. Contextual follow-up check (e.g. selection or confirmation)
         if context and context.get("awaiting_selection"):
             handled = self._handle_context_selection(raw_text, context)
             if handled:
                 return handled
 
-        # 3. Language detection
+        # 3. Language detection (queries registered Language Packs)
         lang = detect_language(raw_text, preferred=LANG_AUTO)
         logger.info("Language detected: %s", lang)
+        pack: LanguagePack = self.registry.get(lang)
 
         # 4. Normalization
         normalized = self.normalizer.normalize(raw_text, language=lang)
         # Strip conversational fillers/polite particles for matching
         clean_command = self.normalizer.strip_conversational_particles(normalized, language=lang)
 
-        # 5. Check if query is too vague (e.g. "اون رو باز کن" / "open that")
-        if self._is_vague_open(clean_command, lang):
+        # 5. Check if query is too vague (e.g. "اون رو باز کن" / "open that") using pack definition
+        if pack.is_vague(clean_command):
             logger.info("Vague command received, asking for clarification: %s", raw_text)
-            clarify_prompt = (
-                "من دقیق متوجه نشدم. میتونی بگی کدوم برنامه رو باز کنم؟"
-                if lang == LANG_PERSIAN
-                else "I didn't quite catch that. Could you specify which application to open?"
+            clarify_prompt = pack.get_response(
+                "clarify_application",
+                default="Could you please specify which application to open?",
             )
             return Intent(
                 name=INTENT_CLARIFY,
@@ -150,29 +151,6 @@ class RuleBasedIntentParser(BaseIntentParser):
 
         return False
 
-    def _is_vague_open(self, text: str, lang: str) -> bool:
-        """Check for ambiguous open requests lacking an entity."""
-        if lang == LANG_PERSIAN:
-            vague_patterns = [
-                r"^اون\s+رو\s+باز\s*کن$",
-                r"^اینو\s+باز\s*کن$",
-                r"^اونه\s+رو\s+باز\s*کن$",
-                r"^باز\s*کن$",
-                r"^اجرا\s*کن$",
-                r"^برنامه\s+رو\s+باز\s*کن$",
-            ]
-        else:
-            vague_patterns = [
-                r"^open\s+that$",
-                r"^open\s+it$",
-                r"^open\s+this$",
-                r"^open\s+the\s+app$",
-                r"^launch\s+it$",
-                r"^run\s+it$",
-                r"^open$",
-            ]
-        return any(re.match(pat, text, re.IGNORECASE) for pat in vague_patterns)
-
     def _handle_context_selection(
         self, text: str, context: dict[str, Any]
     ) -> Optional[Intent]:
@@ -181,18 +159,21 @@ class RuleBasedIntentParser(BaseIntentParser):
         if not candidates:
             return None
 
-        # Check numeric selection ("1", "2", "اول", "دومی")
-        cleaned = text.strip()
+        cleaned = text.strip().lower()
         num: Optional[int] = None
 
         if cleaned.isdigit():
             num = int(cleaned)
-        elif cleaned in ("اول", "اولی", "اولین", "first", "1st"):
-            num = 1
-        elif cleaned in ("دوم", "دومی", "دومین", "second", "2nd"):
-            num = 2
-        elif cleaned in ("سوم", "سومی", "سومین", "third", "3rd"):
-            num = 3
+        else:
+            # Check ordinals from active language pack or all packs
+            lang = context.get("language", "en")
+            pack = self.registry.get(lang)
+            ordinals = dict(pack.get_ordinals())
+            for c in self.registry.get_supported_codes():
+                ordinals.update(self.registry.get(c).get_ordinals())
+
+            if cleaned in ordinals:
+                num = ordinals[cleaned]
 
         if num is not None and 1 <= num <= len(candidates):
             selected = candidates[num - 1]
@@ -210,13 +191,13 @@ class RuleBasedIntentParser(BaseIntentParser):
                 entities=entities,
                 raw_text=text,
                 normalized_text=cleaned,
-                language=context.get("language", LANG_ENGLISH),
+                language=context.get("language", "en"),
             )
 
         # Check if text matches candidate name directly
         for cand in candidates:
             cand_str = str(cand).lower()
-            if cleaned.lower() in cand_str:
+            if cleaned in cand_str:
                 target_intent = context.get("intent", INTENT_PLAY_MUSIC)
                 entities = dict(context.get("entities", {}))
                 if target_intent == INTENT_PLAY_MUSIC:
@@ -228,17 +209,17 @@ class RuleBasedIntentParser(BaseIntentParser):
                     entities=entities,
                     raw_text=text,
                     normalized_text=cleaned,
-                    language=context.get("language", LANG_ENGLISH),
+                    language=context.get("language", "en"),
                 )
 
         return None
 
     def _match_intents(self, raw_text: str, text: str, lang: str) -> Intent:
         """Match input against language-pack intent rules."""
-        pack = self.loader.get_pack(lang)
+        pack = self.registry.get(lang)
         intents_config = pack.intents
 
-        # 1. Direct system utility intents (terminal, file manager, settings, system info, exit, screenshot)
+        # Fixed order of resolution
         fixed_order = [
             INTENT_EXIT_APPLICATION,
             INTENT_SHOW_SYSTEM_INFO,
@@ -276,13 +257,11 @@ class RuleBasedIntentParser(BaseIntentParser):
                     elif intent_name == INTENT_OPEN_APPLICATION:
                         app_ent = entities.get("application")
                         if app_ent and app_ent.lower() in FOLDER_CANONICAL_MAP:
-                            # User said e.g. "Downloads رو باز کن" or "open Downloads"
                             intent_name = INTENT_OPEN_FOLDER
                             entities = {"folder": FOLDER_CANONICAL_MAP[app_ent.lower()]}
                             confidence = CONFIDENCE_EXACT
                         elif app_ent:
-                            # Higher confidence if found in registry
-                            entry = self.registry.find(app_ent)
+                            entry = self.app_registry.find(app_ent)
                             confidence = CONFIDENCE_EXACT if entry else CONFIDENCE_HIGH
                         else:
                             confidence = CONFIDENCE_MEDIUM
@@ -300,8 +279,8 @@ class RuleBasedIntentParser(BaseIntentParser):
                         language=lang,
                     )
 
-        # Fallback check: Did user mention an application directly (e.g. "firefox", "فایرفاکس")?
-        app_entry = self.registry.find(text)
+        # Fallback check: Did user mention an application directly?
+        app_entry = self.app_registry.find(text)
         if app_entry:
             return Intent(
                 name=INTENT_OPEN_APPLICATION,
@@ -312,8 +291,8 @@ class RuleBasedIntentParser(BaseIntentParser):
                 language=lang,
             )
 
-        # Fallback check: Did user mention a canonical folder directly (e.g. "Downloads", "دانلودها")?
-        folder_ent = self.extractor._extract_folder(text, lang)
+        # Fallback check: Did user mention a canonical folder directly?
+        folder_ent = self.extractor._extract_folder(text, pack)
         if folder_ent:
             return Intent(
                 name=INTENT_OPEN_FOLDER,

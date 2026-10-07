@@ -1,0 +1,9 @@
+{
+  "id": "en",
+  "code": "en",
+  "name": "English",
+  "native_name": "English",
+  "english_name": "English",
+  "direction": "ltr",
+  "version": "0.1.1"
+}

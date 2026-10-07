@@ -193,7 +193,7 @@ export function App() {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-sky-400 text-lg tracking-wider">R.I.A.T.A</span>
-                <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono border border-slate-700">v0.1.0</span>
+                <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono border border-slate-700">v0.1.1</span>
                 <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded font-semibold flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   ONLINE
@@ -494,7 +494,7 @@ export function App() {
             </div>
 
             <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 h-[calc(100vh-14rem)] overflow-y-auto whitespace-pre">
-              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 50 automated tests.'}
+              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 67 automated tests.'}
             </div>
           </div>
         )}
@@ -503,12 +503,12 @@ export function App() {
         {activeTab === "docs" && (
           <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full space-y-6 text-sm text-slate-300">
             <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6 space-y-4">
-              <h2 className="text-xl font-bold text-sky-400">About R.I.A.T.A</h2>
+              <h2 className="text-xl font-bold text-sky-400">About R.I.A.T.A v0.1.1</h2>
               <p>
                 <strong>R.I.A.T.A</strong> (Responsive Intent Automation & Task Assistant) is an open-source Ubuntu Linux desktop assistant built by <strong>Ali Kamrani (MRThugh)</strong>.
               </p>
               <p>
-                Version <strong>0.1.0</strong> focuses on an ultra-fast, extensible, rule-based Intent Engine that completely isolates natural language understanding from Linux execution logic.
+                Version <strong>0.1.1</strong> introduces an extensible Language Pack Registry (completely removing language-specific branching from core logic), an Interaction System with short-lived context disambiguation, a risk-aware Policy Engine (ALLOW, CONFIRM, DENY), and a modular Desktop Capability foundation.
               </p>
 
               <h3 className="text-base font-semibold text-sky-300 pt-2">How to Run on Ubuntu Desktop:</h3>

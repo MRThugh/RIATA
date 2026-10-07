@@ -16,6 +16,21 @@ from app.core.constants import (
 )
 
 
+def _parse_bool(val: Any, default: bool = False) -> bool:
+    """Safely parse boolean values avoiding unsafe bool("false") evaluation."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return True
+        if v in ("0", "false", "no", "off"):
+            return False
+    return default
+
+
 @dataclass
 class Config:
     language: str = LANG_AUTO
@@ -52,19 +67,18 @@ class Config:
                     pass
 
         # Environment variable overrides
-        if os.getenv("RIATA_DRY_RUN", "").lower() in ("1", "true", "yes"):
-            data["dry_run"] = True
-        if os.getenv("RIATA_DEBUG", "").lower() in ("1", "true", "yes"):
-            data["debug"] = True
-            data["logging_level"] = "DEBUG"
+        if "RIATA_DRY_RUN" in os.environ:
+            data["dry_run"] = _parse_bool(os.environ["RIATA_DRY_RUN"], False)
+        if "RIATA_DEBUG" in os.environ:
+            data["debug"] = _parse_bool(os.environ["RIATA_DEBUG"], False)
+            if data["debug"]:
+                data["logging_level"] = "DEBUG"
         if os.getenv("RIATA_LANG") in SUPPORTED_LANGUAGES:
             data["language"] = os.environ["RIATA_LANG"]
         if os.getenv("RIATA_MUSIC_DIR"):
             data["music_directory"] = os.environ["RIATA_MUSIC_DIR"]
-        if os.getenv("RIATA_SAFE_EXECUTION", "").lower() in ("0", "false", "no"):
-            data["safe_execution"] = False
-        elif os.getenv("RIATA_SAFE_EXECUTION", "").lower() in ("1", "true", "yes"):
-            data["safe_execution"] = True
+        if "RIATA_SAFE_EXECUTION" in os.environ:
+            data["safe_execution"] = _parse_bool(os.environ["RIATA_SAFE_EXECUTION"], True)
 
         cfg = cls()
         if "language" in data and (data["language"] in SUPPORTED_LANGUAGES or data["language"] == LANG_AUTO):
@@ -74,13 +88,13 @@ class Config:
         if "music_directory" in data:
             cfg.music_directory = str(data["music_directory"])
         if "dry_run" in data:
-            cfg.dry_run = bool(data["dry_run"])
+            cfg.dry_run = _parse_bool(data["dry_run"], cfg.dry_run)
         if "debug" in data:
-            cfg.debug = bool(data["debug"])
+            cfg.debug = _parse_bool(data["debug"], cfg.debug)
         if "logging_level" in data:
             cfg.logging_level = str(data["logging_level"])
         if "safe_execution" in data:
-            cfg.safe_execution = bool(data["safe_execution"])
+            cfg.safe_execution = _parse_bool(data["safe_execution"], cfg.safe_execution)
 
         return cfg
 

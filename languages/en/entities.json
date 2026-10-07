@@ -1,0 +1,51 @@
+{
+  "folders": {
+    "downloads": "Downloads",
+    "download": "Downloads",
+    "documents": "Documents",
+    "document": "Documents",
+    "docs": "Documents",
+    "pictures": "Pictures",
+    "picture": "Pictures",
+    "photos": "Pictures",
+    "images": "Pictures",
+    "music": "Music",
+    "songs": "Music",
+    "audio": "Music",
+    "videos": "Videos",
+    "video": "Videos",
+    "movies": "Videos",
+    "desktop": "Desktop",
+    "home": "Home"
+  },
+  "ordinals": {
+    "first": 1,
+    "1st": 1,
+    "second": 2,
+    "2nd": 2,
+    "third": 3,
+    "3rd": 3,
+    "fourth": 4,
+    "4th": 4,
+    "fifth": 5,
+    "5th": 5
+  },
+  "application_patterns": [
+    "^(?:open|launch|start|run)\\s+(?:app\\s+|application\\s+)?(?P<app>.+?)$",
+    "^(?:open|launch|start|run)\\s+(?P<app>.+?)\\s+(?:app|application)$"
+  ],
+  "application_prefixes_to_strip": ["app", "application", "the"],
+  "application_suffixes_to_strip": ["app", "application"],
+  "folder_patterns": [
+    "^(?:open|show|explore)\\s+(?:my\\s+)?folder\\s+(?P<folder>.+)$",
+    "^(?:open|show|explore)\\s+(?:my\\s+)?(?P<folder>.+?)\\s+folder$",
+    "^folder\\s+(?P<folder>.+)$"
+  ],
+  "song_patterns": [
+    "^play\\s+(?:song\\s+|track\\s+)?(?P<song>.+)$"
+  ],
+  "song_ignore_words": ["music", "a song", "song", "some music"],
+  "file_patterns": [
+    "^open\\s+file\\s+(?P<file>.+)$"
+  ]
+}

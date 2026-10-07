@@ -1,0 +1,45 @@
+{
+  "confirmations": [
+    "yes",
+    "y",
+    "sure",
+    "ok",
+    "yep",
+    "yeah",
+    "confirm",
+    "proceed",
+    "go ahead",
+    "do it"
+  ],
+  "cancellations": [
+    "no",
+    "n",
+    "cancel",
+    "stop",
+    "abort",
+    "nevermind",
+    "don't",
+    "close"
+  ],
+  "vague_patterns": [
+    "^open\\s+that$",
+    "^open\\s+it$",
+    "^open\\s+this$",
+    "^open\\s+the\\s+app$",
+    "^launch\\s+it$",
+    "^run\\s+it$",
+    "^open$"
+  ],
+  "polite_prefixes": [
+    "please",
+    "can you please",
+    "can you",
+    "could you please",
+    "could you",
+    "would you please",
+    "would you",
+    "will you",
+    "i want to",
+    "i would like to"
+  ]
+}

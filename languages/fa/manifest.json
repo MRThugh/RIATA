@@ -1,0 +1,10 @@
+{
+  "id": "fa",
+  "code": "fa",
+  "name": "فارسی",
+  "native_name": "فارسی",
+  "english_name": "Persian",
+  "direction": "rtl",
+  "version": "0.1.1",
+  "script_pattern": "[\\u0600-\\u06FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]"
+}
