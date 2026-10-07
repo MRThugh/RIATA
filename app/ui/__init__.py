@@ -1,15 +1,25 @@
-"""UI package for R.I.A.T.A."""
+"""
+UI package for R.I.A.T.A v0.1.1
+Author: Ali Kamrani (MRThugh)
+"""
 
-from app.ui.chat_widget import ChatWidget
-from app.ui.input_widget import InputWidget
+from app.ui.chat.chat_view import ChatView
+from app.ui.chat.message_widget import MessageWidget
+from app.ui.chat.typing_indicator import TypingIndicator
+from app.ui.input.message_input import MessageInputWidget
 from app.ui.main_window import MainWindow
-from app.ui.message_widget import MessageWidget
-from app.ui.styles import MAIN_STYLESHEET
+from app.ui.shell.header import HeaderBarWidget
+from app.ui.shell.sidebar import SidebarWidget
+from app.ui.themes.manager import ThemeManager, get_theme_manager
 
 __all__ = [
     "MainWindow",
-    "ChatWidget",
+    "ChatView",
     "MessageWidget",
-    "InputWidget",
-    "MAIN_STYLESHEET",
+    "TypingIndicator",
+    "MessageInputWidget",
+    "SidebarWidget",
+    "HeaderBarWidget",
+    "ThemeManager",
+    "get_theme_manager",
 ]

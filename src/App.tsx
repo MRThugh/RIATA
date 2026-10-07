@@ -494,7 +494,7 @@ export function App() {
             </div>
 
             <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 h-[calc(100vh-14rem)] overflow-y-auto whitespace-pre">
-              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 67 automated tests.'}
+              {testOutput || 'Click "Run All Tests" above to execute pytest live against the 71 automated tests.'}
             </div>
           </div>
         )}
