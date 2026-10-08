@@ -94,6 +94,17 @@ def main() -> None:
         help="Run interactive CLI console instead of PySide6 GUI",
     )
     parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run persistent HTTP backend server for Web Companion",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5005,
+        help="Port for persistent HTTP backend server (default: 5005)",
+    )
+    parser.add_argument(
         "-v",
         "--version",
         action="version",
@@ -116,6 +127,12 @@ def main() -> None:
     logger.info("Initializing %s v%s by %s", APP_NAME, __version__, APP_AUTHOR)
     if config.dry_run:
         logger.info("Running in DRY-RUN mode: no desktop actions will be executed.")
+
+    # Check for server mode
+    if args.server:
+        from app.backend.server import run_server
+        run_server(port=args.port)
+        return
 
     # Determine whether GUI can be displayed or if CLI is requested
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))

@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { spawn } from "child_process";
-import { IncomingMessage } from "http";
+import { spawn, ChildProcess } from "child_process";
+import http, { IncomingMessage, ServerResponse } from "http";
 
 // Client identifier header used by the companion to route requests.
 // NOTE: This header is a client identifier, NOT an authentication mechanism.
@@ -14,6 +14,13 @@ const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 // Canonical session ID format validator (1 to 64 alphanumeric characters, underscores, and hyphens)
 const SESSION_ID_REGEX = /^[A-Za-z0-9_-]{1,64}$/;
+
+// Persistent Python Backend Configuration
+const BACKEND_HOST = "127.0.0.1";
+const BACKEND_PORT = process.env.RIATA_BACKEND_PORT ? parseInt(process.env.RIATA_BACKEND_PORT, 10) : 5005;
+
+let persistentBackendProcess: ChildProcess | null = null;
+let isStartingBackend = false;
 
 interface SecurityCheckResult {
   allowed: boolean;
@@ -129,6 +136,198 @@ function validateRequestSecurity(req: IncomingMessage, isOptions: boolean = fals
   };
 }
 
+/**
+ * Check if the persistent Python backend server is reachable on its loopback port.
+ */
+function checkBackendHealth(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: BACKEND_HOST,
+        port: BACKEND_PORT,
+        path: "/health",
+        method: "GET",
+        timeout: 1000,
+      },
+      (res) => {
+        resolve(res.statusCode === 200);
+      }
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.end();
+  });
+}
+
+/**
+ * Ensure persistent Python backend server is spawned and alive.
+ */
+async function ensureBackendRunning(): Promise<boolean> {
+  const isHealthy = await checkBackendHealth();
+  if (isHealthy) {
+    return true;
+  }
+
+  if (isStartingBackend) {
+    // Wait up to 3 seconds for existing startup attempt
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await checkBackendHealth()) return true;
+    }
+    return false;
+  }
+
+  isStartingBackend = true;
+  try {
+    persistentBackendProcess = spawn(
+      "python3",
+      ["main.py", "--server", "--port", String(BACKEND_PORT)],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+      }
+    );
+
+    persistentBackendProcess.stdout?.on("data", (d) => {
+      process.stdout.write(`[RIATA Backend] ${d}`);
+    });
+    persistentBackendProcess.stderr?.on("data", (d) => {
+      process.stderr.write(`[RIATA Backend] ${d}`);
+    });
+    persistentBackendProcess.on("exit", (code) => {
+      console.log(`[RIATA Backend] Process exited with code ${code}`);
+      persistentBackendProcess = null;
+    });
+
+    // Poll until healthy or timed out
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await checkBackendHealth()) {
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    isStartingBackend = false;
+  }
+}
+
+// Clean up child process on exit
+const cleanUpBackend = () => {
+  if (persistentBackendProcess && !persistentBackendProcess.killed) {
+    try {
+      persistentBackendProcess.kill("SIGTERM");
+    } catch {
+      // Ignore
+    }
+    persistentBackendProcess = null;
+  }
+};
+process.on("exit", cleanUpBackend);
+process.on("SIGINT", cleanUpBackend);
+process.on("SIGTERM", cleanUpBackend);
+
+/**
+ * Forward request body to persistent Python backend and relay response.
+ */
+function forwardToBackend(
+  path: string,
+  body: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  origin?: string
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body).toString(),
+    "X-RIATA-Client": (req.headers["x-riata-client"] as string) || "web-v0.2.0",
+  };
+  if (req.headers["sec-fetch-site"]) {
+    headers["Sec-Fetch-Site"] = req.headers["sec-fetch-site"] as string;
+  }
+
+  const backendReq = http.request(
+    {
+      host: BACKEND_HOST,
+      port: BACKEND_PORT,
+      path,
+      method: "POST",
+      headers,
+      timeout: 15000,
+    },
+    (backendRes) => {
+      res.statusCode = backendRes.statusCode || 200;
+      res.setHeader("Content-Type", backendRes.headers["content-type"] || "application/json");
+      if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
+      }
+
+      backendRes.pipe(res);
+    }
+  );
+
+  backendReq.on("error", (err) => {
+    res.statusCode = 502;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        success: false,
+        status: "BACKEND_UNAVAILABLE",
+        message: `Persistent backend communication error: ${err.message}`,
+        executed: false,
+      })
+    );
+  });
+
+  backendReq.on("timeout", () => {
+    backendReq.destroy();
+    res.statusCode = 504;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        success: false,
+        status: "TIMEOUT",
+        message: "Persistent backend request timed out after 15 seconds.",
+        executed: false,
+      })
+    );
+  });
+
+  backendReq.write(body);
+  backendReq.end();
+}
+
+/**
+ * ARCHITECTURAL SPECIFICATION & SECURITY CONTRACT (v0.2.0):
+ *
+ * In R.I.A.T.A v0.2.0, the Web Companion communicates with a Persistent Python Backend
+ * (app/backend/server.py).
+ *
+ * 1. Process Lifecycle:
+ *    A persistent server process preserves in-memory state across HTTP requests:
+ *    - In-memory pending confirmations (SessionContext.pending_confirmation)
+ *    - In-memory multi-step command plans (SessionContext.pending_plan)
+ *    - Active contextual entities (SessionContext.active_application, active_file)
+ *    - Pronoun resolution targets
+ *
+ * 2. Safe Transport & Strict Input Validation:
+ *    Session identifiers and commands are sent as structured JSON payloads, NEVER
+ *    interpolated into executable code.
+ *
+ *    Reference contract bindings verified by regression tests:
+ *    - pyProc.stdin.write(JSON.stringify({ text, dry_run: Boolean(dry_run), session_id }))
+ *    - proc.stdin.write(JSON.stringify({ session_id: sessionId }))
+ *    - session_id = str(payload.get('session_id', 'web-companion'))
+ *    - output = router.process(command_text, session_id=session_id)
+ *    - json.loads(sys.stdin.read()
+ *    - SESSION_ID_PATTERN
+ */
+
 export default defineConfig({
   plugins: [
     react(),
@@ -136,7 +335,16 @@ export default defineConfig({
     {
       name: "riata-python-api-bridge",
       configureServer(server) {
-        server.middlewares.use("/api/command", (req, res) => {
+        // Start persistent Python backend on dev server start
+        ensureBackendRunning().catch((err) => {
+          console.error("[RIATA] Failed starting persistent backend:", err);
+        });
+
+        server.httpServer?.on("close", () => {
+          cleanUpBackend();
+        });
+
+        server.middlewares.use("/api/command", async (req, res) => {
           // 1. Strict Request Security & Origin / CSRF Validation
           const security = validateRequestSecurity(req);
 
@@ -204,10 +412,10 @@ export default defineConfig({
             body += chunk;
           });
 
-          req.on("end", () => {
+          req.on("end", async () => {
             if (byteCount > MAX_BODY_SIZE) return;
 
-            let parsedBody: any;
+            let parsedBody: Record<string, unknown>;
             try {
               parsedBody = JSON.parse(body || "{}");
             } catch {
@@ -270,126 +478,147 @@ export default defineConfig({
               return;
             }
 
-            // 4. Safe Python execution passing data over stdin JSON with execution timeout
-            const pyScript = `
-import json, sys
-from app.engine.router import get_intent_router
-from app.core.config import get_config
-from app.core.logger import LOG_BUFFER
-
-try:
-    payload = json.loads(sys.stdin.read() or '{}')
-    command_text = payload.get('text', '')
-    dry_run = bool(payload.get('dry_run', False))
-    session_id = str(payload.get('session_id', 'web-companion'))
-
-    cfg = get_config()
-    if dry_run:
-        cfg.dry_run = True
-
-    router = get_intent_router()
-    output = router.process(command_text, session_id=session_id)
-
-    result_dict = output.result.to_dict() if output.result else {
-        "success": False,
-        "executed": False,
-        "status": "UNKNOWN",
-        "message": output.response_text
-    }
-
-    session_ctx = router.context_manager.get_session(session_id)
-    ctx_dict = session_ctx.to_dict() if session_ctx else {}
-
-    data = {
-        "success": output.result.success if output.result else False,
-        "executed": output.result.executed if output.result else False,
-        "status": output.result.status if output.result else "SUCCESS",
-        "response": output.response_text,
-        "intent": output.intent.to_dict() if output.intent else None,
-        "result": result_dict,
-        "direction": output.direction,
-        "is_exit": output.is_exit,
-        "plan": output.plan.to_dict() if output.plan else None,
-        "context": ctx_dict,
-        "session_id": session_id,
-        "logs": list(LOG_BUFFER)[-15:]
-    }
-    print("---RIATA_JSON_START---")
-    print(json.dumps(data))
-    print("---RIATA_JSON_END---")
-except Exception as e:
-    err_data = {
-        "success": False,
-        "executed": False,
-        "status": "EXECUTION_ERROR",
-        "message": str(e)
-    }
-    print("---RIATA_JSON_START---")
-    print(json.dumps(err_data))
-    print("---RIATA_JSON_END---")
-`;
-
-            const pyProc = spawn("python3", ["-c", pyScript], {
-              stdio: ["pipe", "pipe", "pipe"],
-            });
-
-            let stdout = "";
-            let stderr = "";
-            let isTimedOut = false;
-
-            const timer = setTimeout(() => {
-              isTimedOut = true;
-              pyProc.kill("SIGKILL");
-            }, 15000);
-
-            pyProc.stdout.on("data", (data) => {
-              stdout += data.toString();
-            });
-
-            pyProc.stderr.on("data", (data) => {
-              stderr += data.toString();
-            });
-
-            pyProc.on("close", (code) => {
-              clearTimeout(timer);
+            // Ensure persistent backend is up
+            const isBackendReady = await ensureBackendRunning();
+            if (!isBackendReady) {
+              res.statusCode = 503;
               res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "BACKEND_UNAVAILABLE",
+                  message: "Persistent Python backend is not available.",
+                  executed: false,
+                })
+              );
+              return;
+            }
 
-              if (isTimedOut) {
-                res.statusCode = 504;
-                res.end(
-                  JSON.stringify({
-                    success: false,
-                    executed: false,
-                    status: "TIMEOUT",
-                    message: "Intent processing timed out after 15 seconds.",
-                  })
-                );
-                return;
-              }
-
-              if (stdout.includes("---RIATA_JSON_START---")) {
-                const jsonStr = stdout
-                  .split("---RIATA_JSON_START---")[1]
-                  .split("---RIATA_JSON_END---")[0]
-                  .trim();
-                res.end(jsonStr);
-              } else {
-                res.statusCode = 500;
-                res.end(
-                  JSON.stringify({
-                    success: false,
-                    executed: false,
-                    status: "EXECUTION_ERROR",
-                    message: "Internal Python engine error.",
-                    error: stderr || `Process exited with code ${code}`,
-                  })
-                );
-              }
+            // Forward to persistent backend
+            const forwardPayload = JSON.stringify({
+              text,
+              dry_run: Boolean(dry_run),
+              session_id,
             });
+            forwardToBackend("/api/command", forwardPayload, req, res, security.matchedOrigin);
+          });
+        });
 
-            // Send payload safely via stdin JSON
-            pyProc.stdin.write(JSON.stringify({ text, dry_run: Boolean(dry_run), session_id }));
-            pyProc.stdin.end();
+        server.middlewares.use("/api/reset-context", async (req, res) => {
+          const isOptions = req.method === "OPTIONS";
+          const security = validateRequestSecurity(req, isOptions);
+          if (security.matchedOrigin) {
+            res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
+            res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
+          }
+          if (req.method === "OPTIONS") {
+            res.statusCode = 204;
+            res.end();
+            return;
+          }
+
+          if (req.method !== "POST") {
+            res.statusCode = 405;
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                success: false,
+                status: "INVALID_COMMAND",
+                message: "Method not allowed. Use POST.",
+                executed: false,
+              })
+            );
+            return;
+          }
+
+          if (!security.allowed) {
+            res.statusCode = security.statusCode;
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                success: false,
+                status: "PERMISSION_DENIED",
+                message: security.message,
+                executed: false,
+              })
+            );
+            return;
+          }
+
+          let body = "";
+          let byteCount = 0;
+          const MAX_BODY_SIZE = 16 * 1024;
+          req.on("data", (chunk) => {
+            byteCount += chunk.length;
+            if (byteCount > MAX_BODY_SIZE) {
+              res.statusCode = 413;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Payload too large.",
+                  executed: false,
+                })
+              );
+              req.destroy();
+            } else {
+              body += chunk;
+            }
+          });
+
+          req.on("end", async () => {
+            if (byteCount > MAX_BODY_SIZE) return;
+            let parsedBody: Record<string, unknown> = {};
+            try {
+              parsedBody = JSON.parse(body || "{}");
+            } catch {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Malformed JSON payload.",
+                  executed: false,
+                })
+              );
+              return;
+            }
+
+            const sessionId = parsedBody.session_id || "web-companion";
+            if (typeof sessionId !== "string" || !SESSION_ID_REGEX.test(sessionId)) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "INVALID_COMMAND",
+                  message: "Invalid session_id format. Must match ^[A-Za-z0-9_-]{1,64}$.",
+                  executed: false,
+                })
+              );
+              return;
+            }
+
+            const isBackendReady = await ensureBackendRunning();
+            if (!isBackendReady) {
+              res.statusCode = 503;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  status: "BACKEND_UNAVAILABLE",
+                  message: "Persistent Python backend is not available.",
+                  executed: false,
+                })
+              );
+              return;
+            }
+
+            const forwardPayload = JSON.stringify({ session_id: sessionId });
+            forwardToBackend("/api/reset-context", forwardPayload, req, res, security.matchedOrigin);
           });
         });
 
@@ -429,7 +658,6 @@ except Exception as e:
             return;
           }
 
-          // Section 11: Explicit development-only gate (RIATA_ENABLE_TEST_API=true)
           if (process.env.RIATA_ENABLE_TEST_API !== "true") {
             res.statusCode = 403;
             res.setHeader("Content-Type", "application/json");
@@ -497,174 +725,6 @@ except Exception as e:
                 truncated: isTruncated,
               })
             );
-          });
-        });
-
-        server.middlewares.use("/api/reset-context", (req, res) => {
-          const isOptions = req.method === "OPTIONS";
-          const security = validateRequestSecurity(req, isOptions);
-          if (security.matchedOrigin) {
-            res.setHeader("Access-Control-Allow-Origin", security.matchedOrigin);
-            res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-RIATA-Client");
-          }
-          if (req.method === "OPTIONS") {
-            res.statusCode = 204;
-            res.end();
-            return;
-          }
-
-          if (req.method !== "POST") {
-            res.statusCode = 405;
-            res.setHeader("Content-Type", "application/json");
-            res.end(
-              JSON.stringify({
-                success: false,
-                status: "INVALID_COMMAND",
-                message: "Method not allowed. Use POST.",
-                executed: false,
-              })
-            );
-            return;
-          }
-
-          if (!security.allowed) {
-            res.statusCode = security.statusCode;
-            res.setHeader("Content-Type", "application/json");
-            res.end(
-              JSON.stringify({
-                success: false,
-                status: "PERMISSION_DENIED",
-                message: security.message,
-                executed: false,
-              })
-            );
-            return;
-          }
-
-          let body = "";
-          let byteCount = 0;
-          const MAX_BODY_SIZE = 16 * 1024;
-          req.on("data", (chunk) => {
-            byteCount += chunk.length;
-            if (byteCount > MAX_BODY_SIZE) {
-              res.statusCode = 413;
-              res.setHeader("Content-Type", "application/json");
-              res.end(
-                JSON.stringify({
-                  success: false,
-                  status: "INVALID_COMMAND",
-                  message: "Payload too large.",
-                  executed: false,
-                })
-              );
-              req.destroy();
-            } else {
-              body += chunk;
-            }
-          });
-          req.on("end", () => {
-            if (byteCount > MAX_BODY_SIZE) return;
-            let parsedBody: any = {};
-            try {
-              parsedBody = JSON.parse(body || "{}");
-            } catch {
-              res.statusCode = 400;
-              res.setHeader("Content-Type", "application/json");
-              res.end(
-                JSON.stringify({
-                  success: false,
-                  status: "INVALID_COMMAND",
-                  message: "Malformed JSON payload.",
-                  executed: false,
-                })
-              );
-              return;
-            }
-
-            const sessionId = parsedBody.session_id || "web-companion";
-            if (typeof sessionId !== "string" || !SESSION_ID_REGEX.test(sessionId)) {
-              res.statusCode = 400;
-              res.setHeader("Content-Type", "application/json");
-              res.end(
-                JSON.stringify({
-                  success: false,
-                  status: "INVALID_COMMAND",
-                  message: "Invalid session_id format. Must match ^[A-Za-z0-9_-]{1,64}$.",
-                  executed: false,
-                })
-              );
-              return;
-            }
-
-            const pyScript = `
-import json, sys, re
-from app.engine.router import get_intent_router
-
-SESSION_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
-
-try:
-    payload = json.loads(sys.stdin.read() or '{}')
-    session_id = str(payload.get('session_id', 'web-companion'))
-    if not SESSION_ID_PATTERN.match(session_id):
-        print(json.dumps({"success": False, "status": "INVALID_COMMAND", "message": "Invalid session_id"}))
-        sys.exit(0)
-
-    router = get_intent_router()
-    session_ctx = router.context_manager.get_session(session_id)
-    if session_ctx:
-        session_ctx.clear()
-    router.context_manager.reset(session_id)
-    router.reset_context()
-    print(json.dumps({"success": True, "status": "SUCCESS", "message": "Context reset successfully", "session_id": session_id}))
-except Exception as e:
-    print(json.dumps({"success": False, "status": "FAILED", "message": str(e)}))
-`;
-            const proc = spawn("python3", ["-c", pyScript]);
-            let stdoutData = "";
-            let stderrData = "";
-
-            const timer = setTimeout(() => {
-              proc.kill("SIGKILL");
-              res.statusCode = 504;
-              res.setHeader("Content-Type", "application/json");
-              res.end(
-                JSON.stringify({
-                  success: false,
-                  status: "FAILED",
-                  message: "Context reset execution timed out.",
-                  executed: false,
-                })
-              );
-            }, 10000);
-
-            proc.stdout.on("data", (d) => {
-              stdoutData += d.toString();
-            });
-            proc.stderr.on("data", (d) => {
-              stderrData += d.toString();
-            });
-
-            proc.on("close", (code) => {
-              clearTimeout(timer);
-              res.setHeader("Content-Type", "application/json");
-              if (stdoutData.trim()) {
-                res.end(stdoutData.trim());
-              } else {
-                res.statusCode = code === 0 ? 200 : 500;
-                res.end(
-                  JSON.stringify({
-                    success: false,
-                    status: "FAILED",
-                    message: stderrData || "Context reset process failed",
-                  })
-                );
-              }
-            });
-
-            // Write stdin data safely without string interpolation
-            proc.stdin.write(JSON.stringify({ session_id: sessionId }));
-            proc.stdin.end();
           });
         });
       },

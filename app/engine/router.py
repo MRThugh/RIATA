@@ -177,7 +177,8 @@ class IntentRouter:
         # 2. Check for Active Pending Confirmation Token
         # =====================================================================
         pending_conf = self.context_manager.get_pending_confirmation(session_id)
-        if pending_conf or self.interaction_context.awaiting_confirmation:
+        legacy_awaiting = (session_id == "default" and self.interaction_context.awaiting_confirmation)
+        if pending_conf or legacy_awaiting:
             lowered = cleaned_input.lower()
             if pack.is_confirmation(lowered) or lowered in ("yes", "y", "بله", "آره", "اره", "تایید"):
                 confirmed_intent = None
@@ -194,9 +195,10 @@ class IntentRouter:
                         expected_entities=pending_conf.entities,
                     )
                     action_label = pending_conf.action_label
-                    self.interaction_context.clear()
-                    self.context.clear()
-                elif self.interaction_context.awaiting_confirmation:
+                    if session_id == "default":
+                        self.interaction_context.clear()
+                        self.context.clear()
+                elif legacy_awaiting:
                     confirmed_intent = self.interaction_context.pending_intent
                     action_label = self.interaction_context.action_label
                     self.interaction_context.clear()
@@ -306,8 +308,9 @@ class IntentRouter:
                         self._mark_remaining_steps(resumed_plan.steps[plan_step_idx + 1:], "CANCELLED")
                 session_ctx.pending_plan = None
                 session_ctx.pending_step_index = 0
-                self.interaction_context.clear()
-                self.context.clear()
+                if session_id == "default":
+                    self.interaction_context.clear()
+                    self.context.clear()
                 logger.info("Session '%s': Cancelled pending confirmation", session_id)
                 cancel_intent = Intent(
                     name=INTENT_CANCEL,
@@ -337,7 +340,11 @@ class IntentRouter:
         # =====================================================================
         # 3. Check for Backwards-Compatible InteractionContext Turn Evaluation
         # =====================================================================
-        context_action, context_payload = self.interaction_context.evaluate_turn(cleaned_input)
+        context_action, context_payload = (
+            self.interaction_context.evaluate_turn(cleaned_input)
+            if session_id == "default"
+            else ("NONE", None)
+        )
         if context_action == "CANCEL":
             cancel_intent = Intent(
                 name=INTENT_CANCEL,
@@ -541,10 +548,11 @@ class IntentRouter:
                 intent=intent,
                 action_label=policy.action_label,
             )
-            self.context["awaiting_confirmation"] = True
-            self.interaction_context.set_pending_confirmation(
-                intent=intent, action_label=policy.action_label, language=intent.language
-            )
+            if session_id == "default":
+                self.context["awaiting_confirmation"] = True
+                self.interaction_context.set_pending_confirmation(
+                    intent=intent, action_label=policy.action_label, language=intent.language
+                )
 
             # Localized confirmation message formatting
             if intent.name == "DELETE_FILE" and intent.entities.get("file"):
@@ -629,16 +637,18 @@ class IntentRouter:
 
         # 4. Context Follow-up or Disambiguation
         if result.requires_context:
-            self.context = dict(result.context_data)
-            self.interaction_context.set_pending_selection(
-                intent_name=result.context_data.get("intent", intent.name),
-                candidates=result.context_data.get("candidates", []),
-                entities=result.context_data.get("entities", {}),
-                language=intent.language,
-            )
+            if session_id == "default":
+                self.context = dict(result.context_data)
+                self.interaction_context.set_pending_selection(
+                    intent_name=result.context_data.get("intent", intent.name),
+                    candidates=result.context_data.get("candidates", []),
+                    entities=result.context_data.get("entities", {}),
+                    language=intent.language,
+                )
         else:
-            self.context.clear()
-            self.interaction_context.clear()
+            if session_id == "default":
+                self.context.clear()
+                self.interaction_context.clear()
 
         # Update Session Context turn state
         session_ctx.record_turn(intent, result)

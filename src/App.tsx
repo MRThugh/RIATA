@@ -1,30 +1,15 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Terminal,
-  FolderOpen,
-  Music,
   Send,
-  ShieldCheck,
-  Cpu,
-  Trash2,
-  CheckCircle2,
-  AlertCircle,
-  HelpCircle,
   Play,
   RotateCcw,
   Layers,
   FileCode,
   Monitor,
   Check,
-  ChevronRight,
   Sparkles,
   ListTree,
-  FileText,
   XCircle,
-  ExternalLink,
-  BookOpen,
-  ShieldAlert,
-  ArrowRight,
 } from "lucide-react";
 
 interface StepInfo {
@@ -62,13 +47,46 @@ interface SessionContextInfo {
   history_count?: number;
 }
 
+interface IntentInfo {
+  name: string;
+  confidence: number;
+  language?: string;
+  raw_text?: string;
+  is_dangerous?: boolean;
+  entities?: Record<string, unknown>;
+}
+
+interface CommandApiResponse {
+  success: boolean;
+  executed?: boolean;
+  status?: string;
+  response: string;
+  intent?: IntentInfo | null;
+  result?: {
+    success: boolean;
+    executed: boolean;
+    status: string;
+    message?: string;
+    metadata?: {
+      confirmation_id?: string;
+      [key: string]: unknown;
+    };
+  };
+  direction?: "rtl" | "ltr";
+  is_exit?: boolean;
+  plan?: CommandPlanInfo | null;
+  context?: SessionContextInfo;
+  session_id?: string;
+  logs?: string[];
+}
+
 interface Message {
   id: string;
   sender: "user" | "assistant";
   text: string;
   intentName?: string;
   confidence?: number;
-  entities?: Record<string, any>;
+  entities?: Record<string, unknown>;
   direction: "rtl" | "ltr";
   timestamp: string;
   status?: string;
@@ -97,7 +115,7 @@ export function App() {
   const [dryRun, setDryRun] = useState(true);
   const [activeTab, setActiveTab] = useState<"chat" | "inspector" | "tests" | "docs">("chat");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [lastIntent, setLastIntent] = useState<any>(null);
+  const [lastIntent, setLastIntent] = useState<IntentInfo | null>(null);
   const [lastPlan, setLastPlan] = useState<CommandPlanInfo | null>(null);
   const [sessionContext, setSessionContext] = useState<SessionContextInfo>({
     session_id: "web-companion",
@@ -154,8 +172,8 @@ export function App() {
         throw new Error(`Server returned ${res.status}`);
       }
 
-      const data = await res.json();
-      setLastIntent(data.intent);
+      const data: CommandApiResponse = await res.json();
+      setLastIntent(data.intent || null);
       if (data.plan) {
         setLastPlan(data.plan);
       }
@@ -188,13 +206,14 @@ export function App() {
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Network Error";
       const assistantMsg: Message = {
         id: `err-${Date.now()}`,
         sender: "assistant",
         text: isPersian
           ? "⚠ خطا: هسته R.I.A.T.A در دسترس نیست یا ارتباط با سرور برقرار نشد."
-          : `⚠ Error: R.I.A.T.A backend is unavailable. (${err.message || "Network Error"})`,
+          : `⚠ Error: R.I.A.T.A backend is unavailable. (${errMsg})`,
         intentName: "BACKEND_UNAVAILABLE",
         status: "BACKEND_UNAVAILABLE",
         direction: isPersian ? "rtl" : "ltr",
@@ -243,7 +262,7 @@ export function App() {
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, resetMsg]);
-    } catch (err) {
+    } catch {
       // Fallback: send text command
       handleSend("فراموش کن");
     }
@@ -261,14 +280,15 @@ export function App() {
         },
       });
       if (res.status === 403 || res.status === 404) {
-        const data = await res.json().catch(() => ({}));
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
         setTestOutput(data.error || "Test execution API is disabled in production (RIATA_ENABLE_TEST_API=false).");
         return;
       }
-      const data = await res.json();
+      const data = (await res.json()) as { output?: string };
       setTestOutput(data.output || "Test execution completed.");
-    } catch (err: any) {
-      setTestOutput(`Error running pytest: ${err.message}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setTestOutput(`Error running pytest: ${errMsg}`);
     } finally {
       setIsRunningTests(false);
     }
