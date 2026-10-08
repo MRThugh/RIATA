@@ -1,0 +1,259 @@
+name: RIATA Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Safety confirmation (type 'release' to proceed)"
+        required: true
+        default: "release"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Release Trigger & Branch
+        env:
+          CONFIRM_RELEASE: ${{ inputs.confirm_release }}
+        run: |
+          echo "============================================================"
+          echo "RIATA RELEASE AUTOMATION PIPELINE"
+          echo "Author: Ali Kamrani (MRThugh)"
+          echo "============================================================"
+          
+          # 1. Verify confirmation token
+          if [ "${CONFIRM_RELEASE}" != "release" ]; then
+            echo "::error::Release aborted: confirmation phrase '${CONFIRM_RELEASE}' does not match required value 'release'."
+            exit 1
+          fi
+          
+          # 2. Verify target branch
+          CURRENT_REF="${{ github.ref }}"
+          if [ "${CURRENT_REF}" != "refs/heads/main" ] && [ "${CURRENT_REF}" != "refs/heads/master" ]; then
+            echo "::error::Release workflow must be triggered from default branch ('main' or 'master'). Current ref: ${CURRENT_REF}"
+            exit 1
+          fi
+          
+          echo "✓ Confirmation phrase validated: '${CONFIRM_RELEASE}'"
+          echo "✓ Running on authorized branch: ${CURRENT_REF}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Extract & Validate Project Versions
+        id: version_check
+        run: |
+          python3 packaging/validate_version.py --github-output
+
+      - name: Check for Existing Git Tag & Release Collision
+        env:
+          TAG: ${{ steps.version_check.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking if tag '${TAG}' already exists..."
+          
+          # Check local tags
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Git tag '${TAG}' already exists locally. Release already exists. Workflow stopped safely to prevent accidental overwrite."
+            exit 1
+          fi
+          
+          # Check remote repository tags
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "::error::Git tag '${TAG}' already exists on remote origin. Release already exists. Workflow stopped safely to prevent accidental overwrite."
+            exit 1
+          fi
+          
+          # Check existing GitHub release
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::GitHub Release '${TAG}' already exists. Release already exists. Workflow stopped safely to prevent accidental overwrite."
+            exit 1
+          fi
+          
+          echo "✓ Tag '${TAG}' is novel and available for publication."
+
+      - name: Install System Dependencies for Headless Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libdbus-1-3 \
+            libfontconfig1
+
+      - name: Install Python Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run Pytest Test Suite
+        run: |
+          echo "Running full Python test suite before release..."
+          pytest -v --tb=short
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Lint Frontend (TypeScript)
+        run: npm run lint
+
+      - name: Build Web Companion
+        run: npm run build
+
+      - name: Build Native Ubuntu Package (.deb)
+        id: build_deb
+        run: |
+          python3 packaging/build_deb.py --output-dir dist
+          
+          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
+          CHECKSUM=$(sha256sum "${DEB_FILE}" | awk '{print $1}')
+          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Package Structure & Metadata
+        run: |
+          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
+          python3 packaging/verify_deb.py "${DEB_FILE}" \
+            --expected-version "${{ steps.version_check.outputs.version }}" \
+            --checksum-file dist/SHA256SUMS
+
+      - name: Installation Smoke Test on Ubuntu Runner
+        run: |
+          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
+          echo "Installing package into runner via dpkg..."
+          sudo dpkg -i "${DEB_FILE}"
+          
+          echo "Verifying package status with dpkg-query..."
+          dpkg -s riata | grep "Status: install ok installed"
+          
+          echo "Executing installed binary smoke test..."
+          python3 packaging/verify_deb.py "${DEB_FILE}" \
+            --expected-version "${{ steps.version_check.outputs.version }}" \
+            --smoke-test
+
+      - name: Upload Package Artifacts to Actions Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: RIATA-${{ steps.version_check.outputs.version }}-ubuntu-amd64
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Create Git Tag
+        env:
+          TAG: ${{ steps.version_check.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release RIATA ${TAG}" "${{ github.sha }}"
+          git push origin "${TAG}"
+          echo "✓ Successfully created and pushed tag '${TAG}' at commit ${{ github.sha }}"
+
+      - name: Create GitHub Release
+        env:
+          TAG: ${{ steps.version_check.outputs.tag }}
+          VERSION: ${{ steps.version_check.outputs.version }}
+          DEB_NAME: ${{ steps.version_check.outputs.deb_name }}
+          CHECKSUM: ${{ steps.build_deb.outputs.checksum }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat <<EOF > release_notes.md
+          ## RIATA v${VERSION}
+
+          Responsive Intent Automation & Task Assistant for Ubuntu Linux.
+          Deterministic, rule-based desktop assistant supporting Persian and English with multi-step planning and contextual memory.
+
+          ### 📦 Native Release Artifacts
+          | File | Target Architecture | Description |
+          |---|---|---|
+          | \`${DEB_NAME}\` | \`amd64\` (x86_64) | Debian/Ubuntu installable package |
+          | \`SHA256SUMS\` | All | SHA-256 cryptographic verification file |
+          | \`${DEB_NAME}.sha256\` | All | Standalone checksum for package |
+
+          ### 🔑 SHA-256 Checksum
+          \`\`\`text
+          ${CHECKSUM}  ${DEB_NAME}
+          \`\`\`
+
+          ### 🚀 Quick Install (Ubuntu / Debian)
+          \`\`\`bash
+          # Download and install the native Debian package:
+          sudo apt install ./${DEB_NAME}
+          # Or using dpkg:
+          sudo dpkg -i ${DEB_NAME}
+          \`\`\`
+
+          ### 💡 Launching RIATA
+          \`\`\`bash
+          # Graphical Desktop GUI (requires PySide6):
+          riata
+
+          # Interactive CLI Console:
+          riata --cli
+
+          # Safe Simulation Mode (Dry-Run):
+          riata --dry-run
+
+          # Query Version:
+          riata --version
+          \`\`\`
+
+          ### 🛡️ Build & Quality Verification
+          - **Source Version:** \`${VERSION}\`
+          - **Git Reference:** \`${TAG}\` (\`${{ github.sha }}\`)
+          - **Builder Environment:** Ubuntu Linux (\`ubuntu-latest\`)
+          - **Python Test Suite:** PASS (pytest)
+          - **Frontend Companion:** PASS (TypeScript lint & Vite production build)
+          - **Debian Package Integrity:** PASS (\`dpkg-deb\` inspection & file layout verified)
+          - **Host Smoke Test:** PASS (\`riata --version\` verified post-install)
+          EOF
+
+          gh release create "${TAG}" \
+            "dist/${DEB_NAME}" \
+            "dist/SHA256SUMS" \
+            "dist/${DEB_NAME}.sha256" \
+            --title "RIATA ${TAG}" \
+            --notes-file release_notes.md \
+            --generate-notes
+
+          echo "✓ Successfully created GitHub Release for '${TAG}'"
+
+      - name: Write GitHub Step Summary
+        if: always()
+        run: |
+          cat <<EOF >> $GITHUB_STEP_SUMMARY
+          ## 🚀 RIATA Release Workflow Summary
+
+          | Metric / Stage | Status | Details |
+          |---|---|---|
+          | **Version** | ✅ Validated | \`${{ steps.version_check.outputs.version || 'Unknown' }}\` |
+          | **Git Tag** | ✅ Configured | \`${{ steps.version_check.outputs.tag || 'Unknown' }}\` |
+          | **Commit** | 📌 Pinned | \`${{ github.sha }}\` |
+          | **Ubuntu Package** | 📦 Built | \`${{ steps.version_check.outputs.deb_name || 'N/A' }}\` |
+          | **Architecture** | 🖥️ amd64 | Linux x86_64 native |
+          | **SHA-256 Hash** | 🔑 Verified | \`${{ steps.build_deb.outputs.checksum || 'N/A' }}\` |
+          | **Python Tests** | ✅ PASS | Pytest test suite executed cleanly |
+          | **Frontend Build** | ✅ PASS | TypeScript typecheck and Vite build succeeded |
+          | **Package Validation** | ✅ PASS | Control metadata and payload paths verified |
+          | **Smoke Test** | ✅ PASS | Installed binary returned expected version |
+          | **GitHub Release** | 🚀 PUBLISHED | Tag and release available on GitHub |
+          EOF

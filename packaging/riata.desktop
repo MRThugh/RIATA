@@ -1,0 +1,24 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RIATA
+GenericName=Responsive Intent Automation & Task Assistant
+Comment=Deterministic, rule-based Linux desktop Intent Assistant supporting Persian and English
+Exec=/usr/bin/riata
+Icon=riata
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
+StartupWMClass=riata
+Keywords=assistant;automation;intent;nlp;persian;desktop;tasks;
+Actions=CLI;DryRun;
+
+[Desktop Action CLI]
+Name=Open in Interactive CLI Mode
+Exec=/usr/bin/riata --cli
+Terminal=true
+
+[Desktop Action DryRun]
+Name=Launch in Simulation Mode (Dry-Run)
+Exec=/usr/bin/riata --dry-run
+Terminal=false

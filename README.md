@@ -251,6 +251,28 @@ npm run dev
 
 ---
 
+## 📦 Releases
+
+RIATA features a smart, automated GitHub Actions release pipeline (`.github/workflows/release.yml`) that builds native Ubuntu Debian packages (`.deb`) and publishes GitHub Releases.
+
+The release workflow **automatically determines the version directly from the source code** (canonical `pyproject.toml`, synchronized with `app/core/constants.py`, `package.json`, and `metadata.json`). The version is never hardcoded or typed manually into the workflow.
+
+### Automated Release Procedure:
+1. **Update the project version** across the source tree (e.g. `0.2.0` → `0.3.0`).
+2. **Commit and push** the changes to the default branch (`main`).
+3. Open **GitHub Actions** in the repository.
+4. Select the **RIATA Release** workflow.
+5. Click **Run workflow** (confirmation phrase: `release`).
+6. The workflow automatically **validates the version** and ensures all sources match.
+7. Runs the complete **Python test suite** (`pytest`) and **frontend validation** (`npm run lint`, `npm run build`).
+8. Builds the native Ubuntu package (`RIATA_<version>_amd64.deb`).
+9. Validates package architecture, control metadata, and runs an **installation smoke test**.
+10. Creates the Git tag (`v<version>`).
+11. Creates the **GitHub Release** (`RIATA v<version>`).
+12. Uploads the `.deb` package and `SHA256SUMS` checksums.
+
+---
+
 ## 👨‍💻 Author & License
 
 Created and maintained by **Ali Kamrani ([MRThugh](https://github.com/MRThugh))**.  
