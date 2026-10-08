@@ -455,3 +455,51 @@ def test_http_concurrent_requests_serialized(persistent_server):
     for status, res in results:
         assert status == 200
         assert res["success"] is True
+
+
+def test_http_concurrent_requests_isolated_dry_run(persistent_server):
+    """
+    Verify that concurrent requests with conflicting dry_run settings
+    (Session A dry_run=True, Session B dry_run=False) run with strictly isolated
+    thread-local dry_run values without race conditions.
+    """
+    session_dry = "test-concurrent-dry"
+    session_real = "test-concurrent-real"
+    results = {}
+    errors = []
+
+    def send_cmd(session_id: str, is_dry: bool):
+        try:
+            status, res = post_http(
+                persistent_server,
+                "/api/command",
+                {"text": "Firefox رو باز کن", "dry_run": is_dry, "session_id": session_id},
+            )
+            results[session_id] = (status, res)
+        except Exception as e:
+            errors.append(e)
+
+    # Launch concurrently
+    t_dry = threading.Thread(target=send_cmd, args=(session_dry, True))
+    t_real = threading.Thread(target=send_cmd, args=(session_real, False))
+
+    t_dry.start()
+    t_real.start()
+    t_dry.join(timeout=5)
+    t_real.join(timeout=5)
+
+    assert len(errors) == 0
+    assert session_dry in results
+    assert session_real in results
+
+    status_dry, res_dry = results[session_dry]
+    status_real, res_real = results[session_real]
+
+    assert status_dry == 200
+    assert status_real == 200
+
+    # Ensure dry_run session isolated
+    assert res_dry["result"]["is_dry_run"] is True
+    # Ensure real session isolated - was not contaminated by dry_run session
+    assert res_real["result"]["is_dry_run"] is False
+

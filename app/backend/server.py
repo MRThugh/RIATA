@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from app.core.config import get_config
+from app.core.config import get_config, thread_dry_run
 from app.core.constants import APP_NAME, __version__
 from app.core.logger import LOG_BUFFER, get_logger
 from app.engine.router import IntentRouter, get_intent_router
@@ -329,16 +329,9 @@ class RiataBackendHandler(BaseHTTPRequestHandler):
         session_lock = _SESSION_LOCKS.get_lock(session_id)
         with session_lock:
             try:
-                cfg = get_config()
-                orig_dry_run = cfg.dry_run
-                if dry_run:
-                    cfg.dry_run = True
-
-                router: IntentRouter = get_intent_router()
-                output = router.process(command_text, session_id=session_id)
-
-                if dry_run:
-                    cfg.dry_run = orig_dry_run
+                with thread_dry_run(dry_run):
+                    router: IntentRouter = get_intent_router()
+                    output = router.process(command_text, session_id=session_id)
 
                 result_dict = output.result.to_dict() if output.result else {
                     "success": False,

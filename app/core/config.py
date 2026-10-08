@@ -3,8 +3,10 @@ Configuration management for R.I.A.T.A v0.1.1
 Author: Ali Kamrani (MRThugh)
 """
 
+import contextlib
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +16,30 @@ from app.core.constants import (
     LANG_AUTO,
     SUPPORTED_LANGUAGES,
 )
+
+_thread_local = threading.local()
+
+
+@contextlib.contextmanager
+def thread_dry_run(override: Optional[bool]):
+    """
+    Context manager to safely set a thread-local dry_run override.
+    Eliminates concurrency race conditions between parallel sessions/requests
+    where one request wants dry_run and another does not.
+    """
+    if override is None:
+        yield
+        return
+    old_val = getattr(_thread_local, "dry_run", None)
+    _thread_local.dry_run = bool(override)
+    try:
+        yield
+    finally:
+        if old_val is None:
+            if hasattr(_thread_local, "dry_run"):
+                delattr(_thread_local, "dry_run")
+        else:
+            _thread_local.dry_run = old_val
 
 
 def _parse_bool(val: Any, default: bool = False) -> bool:
@@ -36,7 +62,7 @@ class Config:
     language: str = LANG_AUTO
     theme: str = "dark"
     music_directory: str = field(default_factory=lambda: str(Path.home() / "Music"))
-    dry_run: bool = False
+    _dry_run: bool = False
     debug: bool = False
     logging_level: str = "INFO"
     safe_execution: bool = True
@@ -44,6 +70,44 @@ class Config:
     confirmation_lifetime: float = 60.0  # 1 minute pending confirmation TTL
     max_context_history: int = 20
     max_plan_steps: int = 5
+
+    def __init__(
+        self,
+        language: str = LANG_AUTO,
+        theme: str = "dark",
+        music_directory: Optional[str] = None,
+        dry_run: bool = False,
+        debug: bool = False,
+        logging_level: str = "INFO",
+        safe_execution: bool = True,
+        context_lifetime: float = 300.0,
+        confirmation_lifetime: float = 60.0,
+        max_context_history: int = 20,
+        max_plan_steps: int = 5,
+        **kwargs: Any,
+    ):
+        self.language = language
+        self.theme = theme
+        self.music_directory = music_directory if music_directory is not None else str(Path.home() / "Music")
+        self._dry_run = bool(dry_run)
+        self.debug = debug
+        self.logging_level = logging_level
+        self.safe_execution = safe_execution
+        self.context_lifetime = context_lifetime
+        self.confirmation_lifetime = confirmation_lifetime
+        self.max_context_history = max_context_history
+        self.max_plan_steps = max_plan_steps
+
+    @property
+    def dry_run(self) -> bool:
+        override = getattr(_thread_local, "dry_run", None)
+        if override is not None:
+            return bool(override)
+        return self._dry_run
+
+    @dry_run.setter
+    def dry_run(self, val: bool) -> None:
+        self._dry_run = bool(val)
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
