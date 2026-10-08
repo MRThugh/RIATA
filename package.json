@@ -9,8 +9,8 @@
     "lint": "tsc --noEmit",
     "preview": "vite preview --port 3000 --host 127.0.0.1",
     "test": "pytest",
-    "validate:version": "python3 packaging/validate_version.py",
-    "build:deb": "python3 packaging/build_deb.py"
+    "validate:version": "python3 release_tools/validate_version.py",
+    "build:deb": "python3 release_tools/build_deb.py"
   },
   "dependencies": {
     "clsx": "^2.1.1",

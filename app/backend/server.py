@@ -205,7 +205,9 @@ class RiataBackendHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        """Handle health-check probes."""
+        """Handle health-check probes and optional static web companion assets."""
+        from pathlib import Path
+
         parsed_path = urlparse(self.path).path
         if parsed_path in ("/health", "/api/health"):
             self._send_json_response(
@@ -214,6 +216,53 @@ class RiataBackendHandler(BaseHTTPRequestHandler):
                 origin=self.headers.get("Origin"),
             )
             return
+
+        # Check for static web companion files
+        static_dirs = [
+            Path("/usr/lib/riata/web"),
+            Path(__file__).resolve().parent.parent.parent / "dist",
+        ]
+        active_static: Optional[Path] = None
+        for sdir in static_dirs:
+            if sdir.is_dir() and (sdir / "index.html").is_file():
+                active_static = sdir
+                break
+
+        if active_static:
+            rel = parsed_path.lstrip("/") or "index.html"
+            target_file = (active_static / rel).resolve()
+            try:
+                target_file.relative_to(active_static.resolve())
+            except ValueError:
+                self._send_json_response(HTTPStatus.FORBIDDEN, {"error": "Forbidden", "status": "FORBIDDEN"})
+                return
+
+            if not target_file.is_file():
+                target_file = active_static / "index.html"
+
+            if target_file.is_file():
+                ext = target_file.suffix.lower()
+                mime = "text/plain"
+                if ext == ".html":
+                    mime = "text/html; charset=utf-8"
+                elif ext == ".js":
+                    mime = "application/javascript"
+                elif ext == ".css":
+                    mime = "text/css"
+                elif ext == ".svg":
+                    mime = "image/svg+xml"
+                elif ext == ".json":
+                    mime = "application/json"
+                elif ext in (".png", ".jpg", ".jpeg", ".ico"):
+                    mime = f"image/{ext.lstrip('.')}"
+
+                body = target_file.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
 
         self._send_json_response(
             HTTPStatus.NOT_FOUND,

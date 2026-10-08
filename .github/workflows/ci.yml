@@ -42,12 +42,13 @@ jobs:
 
       - name: Byte-compile Python code (syntax check)
         run: |
-          python -m compileall app/ tests/ main.py
+          python -m compileall app/ tests/ release_tools/ main.py
 
-      - name: Basic module import check
+      - name: Basic module import & version check
         run: |
           python -c "import app; print('R.I.A.T.A version:', app.__version__)"
           python main.py --version
+          python release_tools/validate_version.py
 
       - name: Run pytest test suite
         run: |

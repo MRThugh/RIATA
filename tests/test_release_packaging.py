@@ -11,8 +11,8 @@ try:
 except ImportError:
     pytest = None
 
-from packaging.validate_version import SEMVER_REGEX, validate_versions
-from packaging.build_deb import calculate_dir_size_kb, copy_tree_clean
+from release_tools.validate_version import SEMVER_REGEX, validate_versions
+from release_tools.build_deb import calculate_dir_size_kb, copy_tree_clean
 
 
 def test_semver_regex_valid():

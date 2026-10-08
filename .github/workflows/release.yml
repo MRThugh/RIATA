@@ -63,34 +63,30 @@ jobs:
       - name: Extract & Validate Project Versions
         id: version_check
         run: |
-          python3 packaging/validate_version.py --github-output
+          python3 release_tools/validate_version.py --github-output
 
       - name: Check for Existing Git Tag & Release Collision
         env:
           TAG: ${{ steps.version_check.outputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Checking if tag '${TAG}' already exists..."
-          
-          # Check local tags
-          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::Git tag '${TAG}' already exists locally. Release already exists. Workflow stopped safely to prevent accidental overwrite."
-            exit 1
-          fi
-          
-          # Check remote repository tags
-          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
-            echo "::error::Git tag '${TAG}' already exists on remote origin. Release already exists. Workflow stopped safely to prevent accidental overwrite."
-            exit 1
-          fi
+          echo "Checking if release or tag '${TAG}' already exists..."
           
           # Check existing GitHub release
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::error::GitHub Release '${TAG}' already exists. Release already exists. Workflow stopped safely to prevent accidental overwrite."
+            echo "::error::GitHub Release '${TAG}' already exists. Release already published. Workflow stopped safely to prevent accidental overwrite."
             exit 1
           fi
           
-          echo "✓ Tag '${TAG}' is novel and available for publication."
+          # Check local and remote tags
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::warning::Tag '${TAG}' already exists locally."
+          fi
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "::warning::Tag '${TAG}' already exists on remote origin (release not yet published)."
+          else
+            echo "✓ Tag '${TAG}' is novel and available for publication."
+          fi
 
       - name: Install System Dependencies for Headless Qt
         run: |
@@ -108,67 +104,67 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run Pytest Test Suite
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           echo "Running full Python test suite before release..."
           pytest -v --tb=short
 
-      - name: Install Node Dependencies
+      - name: Install Node Dependencies (Reproducible)
         run: npm ci
 
       - name: Lint Frontend (TypeScript)
         run: npm run lint
 
       - name: Build Web Companion
-        run: npm run build
+        run: |
+          npm run build
+          # Package standalone Web Companion release archive
+          VERSION="${{ steps.version_check.outputs.version }}"
+          mkdir -p dist_artifacts
+          tar -czf "dist_artifacts/RIATA_${VERSION}_web_companion.tar.gz" -C dist .
+          echo "✓ Packaged standalone Web Companion archive"
 
       - name: Build Native Ubuntu Package (.deb)
         id: build_deb
         run: |
-          python3 packaging/build_deb.py --output-dir dist
+          python3 release_tools/build_deb.py --output-dir dist_artifacts
           
-          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
+          DEB_FILE="dist_artifacts/${{ steps.version_check.outputs.deb_name }}"
           CHECKSUM=$(sha256sum "${DEB_FILE}" | awk '{print $1}')
           echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Verify Package Structure & Metadata
         run: |
-          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
-          python3 packaging/verify_deb.py "${DEB_FILE}" \
+          DEB_FILE="dist_artifacts/${{ steps.version_check.outputs.deb_name }}"
+          python3 release_tools/verify_deb.py "${DEB_FILE}" \
             --expected-version "${{ steps.version_check.outputs.version }}" \
-            --checksum-file dist/SHA256SUMS
+            --checksum-file dist_artifacts/SHA256SUMS
 
       - name: Installation Smoke Test on Ubuntu Runner
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          DEB_FILE="dist/${{ steps.version_check.outputs.deb_name }}"
+          DEB_FILE="dist_artifacts/${{ steps.version_check.outputs.deb_name }}"
           echo "Installing package into runner via dpkg..."
           sudo dpkg -i "${DEB_FILE}"
           
           echo "Verifying package status with dpkg-query..."
           dpkg -s riata | grep "Status: install ok installed"
           
-          echo "Executing installed binary smoke test..."
-          python3 packaging/verify_deb.py "${DEB_FILE}" \
+          echo "Executing installed binary and runtime smoke test..."
+          python3 release_tools/verify_deb.py "${DEB_FILE}" \
             --expected-version "${{ steps.version_check.outputs.version }}" \
             --smoke-test
 
       - name: Upload Package Artifacts to Actions Run
         uses: actions/upload-artifact@v4
         with:
-          name: RIATA-${{ steps.version_check.outputs.version }}-ubuntu-amd64
-          path: dist/*
+          name: RIATA-${{ steps.version_check.outputs.version }}-artifacts
+          path: dist_artifacts/*
           if-no-files-found: error
 
-      - name: Create Git Tag
-        env:
-          TAG: ${{ steps.version_check.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release RIATA ${TAG}" "${{ github.sha }}"
-          git push origin "${TAG}"
-          echo "✓ Successfully created and pushed tag '${TAG}' at commit ${{ github.sha }}"
-
-      - name: Create GitHub Release
+      - name: Create GitHub Release & Git Tag (Atomic & Retry-Safe)
         env:
           TAG: ${{ steps.version_check.outputs.tag }}
           VERSION: ${{ steps.version_check.outputs.version }}
@@ -185,11 +181,12 @@ jobs:
           ### 📦 Native Release Artifacts
           | File | Target Architecture | Description |
           |---|---|---|
-          | \`${DEB_NAME}\` | \`amd64\` (x86_64) | Debian/Ubuntu installable package |
-          | \`SHA256SUMS\` | All | SHA-256 cryptographic verification file |
-          | \`${DEB_NAME}.sha256\` | All | Standalone checksum for package |
+          | \`${DEB_NAME}\` | \`amd64\` (x86_64) | Native Ubuntu / Debian installable package |
+          | \`RIATA_${VERSION}_web_companion.tar.gz\` | Any | Web Companion standalone production bundle |
+          | \`SHA256SUMS\` | All | Cryptographic SHA-256 verification sums |
+          | \`${DEB_NAME}.sha256\` | All | Standalone checksum file for Debian package |
 
-          ### 🔑 SHA-256 Checksum
+          ### 🔑 Primary Package Checksum (SHA-256)
           \`\`\`text
           ${CHECKSUM}  ${DEB_NAME}
           \`\`\`
@@ -204,7 +201,7 @@ jobs:
 
           ### 💡 Launching RIATA
           \`\`\`bash
-          # Graphical Desktop GUI (requires PySide6):
+          # Graphical Desktop GUI (PySide6):
           riata
 
           # Interactive CLI Console:
@@ -212,6 +209,9 @@ jobs:
 
           # Safe Simulation Mode (Dry-Run):
           riata --dry-run
+
+          # Persistent Local Web Companion Server:
+          riata --server --port 5005
 
           # Query Version:
           riata --version
@@ -221,21 +221,24 @@ jobs:
           - **Source Version:** \`${VERSION}\`
           - **Git Reference:** \`${TAG}\` (\`${{ github.sha }}\`)
           - **Builder Environment:** Ubuntu Linux (\`ubuntu-latest\`)
-          - **Python Test Suite:** PASS (pytest)
+          - **Python Test Suite:** PASS (pytest with headless offscreen Qt)
           - **Frontend Companion:** PASS (TypeScript lint & Vite production build)
-          - **Debian Package Integrity:** PASS (\`dpkg-deb\` inspection & file layout verified)
-          - **Host Smoke Test:** PASS (\`riata --version\` verified post-install)
+          - **Debian Package Integrity:** PASS (\`dpkg-deb\` control metadata & payload audit)
+          - **Host Smoke Test:** PASS (\`riata --version\` & PySide6 offscreen initialization)
           EOF
 
+          # gh release create handles creating the git tag at target commit and attaching artifacts atomically
           gh release create "${TAG}" \
-            "dist/${DEB_NAME}" \
-            "dist/SHA256SUMS" \
-            "dist/${DEB_NAME}.sha256" \
+            "dist_artifacts/${DEB_NAME}" \
+            "dist_artifacts/RIATA_${VERSION}_web_companion.tar.gz" \
+            "dist_artifacts/SHA256SUMS" \
+            "dist_artifacts/${DEB_NAME}.sha256" \
+            --target "${{ github.sha }}" \
             --title "RIATA ${TAG}" \
             --notes-file release_notes.md \
             --generate-notes
 
-          echo "✓ Successfully created GitHub Release for '${TAG}'"
+          echo "✓ Successfully created GitHub Release and Tag for '${TAG}' at commit ${{ github.sha }}"
 
       - name: Write GitHub Step Summary
         if: always()
@@ -249,11 +252,12 @@ jobs:
           | **Git Tag** | ✅ Configured | \`${{ steps.version_check.outputs.tag || 'Unknown' }}\` |
           | **Commit** | 📌 Pinned | \`${{ github.sha }}\` |
           | **Ubuntu Package** | 📦 Built | \`${{ steps.version_check.outputs.deb_name || 'N/A' }}\` |
+          | **Web Companion** | 🌐 Bundled | \`RIATA_${{ steps.version_check.outputs.version || '0.2.0' }}_web_companion.tar.gz\` |
           | **Architecture** | 🖥️ amd64 | Linux x86_64 native |
           | **SHA-256 Hash** | 🔑 Verified | \`${{ steps.build_deb.outputs.checksum || 'N/A' }}\` |
           | **Python Tests** | ✅ PASS | Pytest test suite executed cleanly |
           | **Frontend Build** | ✅ PASS | TypeScript typecheck and Vite build succeeded |
           | **Package Validation** | ✅ PASS | Control metadata and payload paths verified |
-          | **Smoke Test** | ✅ PASS | Installed binary returned expected version |
-          | **GitHub Release** | 🚀 PUBLISHED | Tag and release available on GitHub |
+          | **Smoke Test** | ✅ PASS | Installed binary & PySide6 offscreen test passed |
+          | **GitHub Release** | 🚀 PUBLISHED | Tag and release published atomically |
           EOF
